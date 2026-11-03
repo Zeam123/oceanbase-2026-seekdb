@@ -225,6 +225,7 @@ SQL_UNITY_GROUPS = [
             "src/sql/engine/basic/ob_chunk_row_store.cpp",
             "src/sql/engine/basic/ob_expr_values_op.cpp",
             "src/sql/engine/basic/ob_function_table_op.cpp",
+            "src/sql/engine/basic/ob_file_scan_utils.cpp",
             "src/sql/table_function/table_function.cpp",
             "src/sql/table_function/table_function_scan.cpp",
             "src/sql/engine/basic/ob_group_join_buffer.cpp",

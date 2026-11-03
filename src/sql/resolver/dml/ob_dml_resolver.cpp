@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/table_function/table_function.h"
+#include "sql/engine/basic/ob_file_scan_utils.h"
 #include "config_bridge.h"
 #include "ob_dml_resolver.h"
 #include "sql/resolver/dml/ob_view_table_resolver.h"
@@ -3556,6 +3557,101 @@ int ObDMLResolver::bind_fixed_table_function(const TableFunctionCall &call, Tabl
     OZ (resolve_function_table_column_item(*item, column.type_.get_meta_type(),
           column.type_.get_accuracy(), ObString::make_string(column.name_), column.id_, bound));
   }
+  return ret;
+}
+
+int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, TableItem *&item)
+{
+  int ret = OB_SUCCESS;
+  bool enabled = false;
+  const ParseNode *path_node = nullptr;
+  ObString path;
+  ObString checked_path;
+  ObString secure_file_priv;
+  ObFileTableFormat format = FILE_TABLE_CSV;
+  ObSEArray<ObFileTableColumn, 16> columns;
+
+  if (OB_ISNULL(call.descriptor_) || OB_ISNULL(call.arguments_) ||
+      call.arguments_->num_child_ < 1 || OB_ISNULL(call.arguments_->children_[0])) {
+    ret = OB_ERR_PARAM_SIZE;
+  } else if (OB_FAIL(session_info_->get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled))) {
+  } else if (!enabled) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL is disabled; set enable_file_sql = ON");
+  } else if (OB_FALSE_IT(path_node = call.arguments_->children_[0])) {
+  } else if (path_node->type_ != T_VARCHAR) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL path must be a constant string");
+  } else {
+    path.assign_ptr(path_node->str_value_, path_node->str_len_);
+  }
+
+  // File options are structural and therefore must be constants at bind time.
+  for (int64_t i = 1; OB_SUCC(ret) && i < call.arguments_->num_child_; ++i) {
+    const ParseNode *option = call.arguments_->children_[i];
+    if (OB_ISNULL(option) || option->type_ != T_OP_EQ || option->num_child_ != 2 ||
+        OB_ISNULL(option->children_[0]) || OB_ISNULL(option->children_[1])) {
+      ret = OB_ERR_PARSE_SQL;
+    } else {
+      const ParseNode *name_node = option->children_[0];
+      const ParseNode *value_node = option->children_[1];
+      while (name_node->str_value_ == nullptr && name_node->num_child_ > 0 && name_node->children_[0] != nullptr) {
+        name_node = name_node->children_[0];
+      }
+      ObString name(name_node->str_len_, name_node->str_value_);
+      if (0 == name.case_compare("sample_size")) {
+        if (value_node->type_ != T_INT || value_node->value_ != -1) { ret = OB_NOT_SUPPORTED; }
+      } else if (0 == name.case_compare("header")) {
+        if (value_node->type_ != T_BOOL && value_node->type_ != T_INT) { ret = OB_ERR_PARSE_SQL; }
+      } else if (0 == name.case_compare("format") && call.descriptor_->id_ == READ_JSON_FUNCTION_ID) {
+        ObString value(value_node->str_len_, value_node->str_value_);
+        if (value_node->type_ != T_VARCHAR || 0 != value.case_compare("newline_delimited")) { ret = OB_ERR_PARSE_SQL; }
+      } else {
+        ret = OB_ERR_PARSE_SQL;
+      }
+    }
+  }
+
+  if (OB_SUCC(ret)) {
+    if (call.descriptor_->id_ == READ_JSON_FUNCTION_ID || call.descriptor_->id_ == READ_NDJSON_FUNCTION_ID) {
+      format = FILE_TABLE_JSONL;
+    } else if (call.descriptor_->id_ == READ_PARQUET_FUNCTION_ID) {
+      format = FILE_TABLE_PARQUET;
+    } else if (call.descriptor_->id_ == GLOB_FUNCTION_ID) {
+      format = FILE_TABLE_GLOB;
+    }
+    if (format == FILE_TABLE_GLOB) {
+      int64_t wildcard = path.length();
+      for (int64_t i = 0; i < path.length(); ++i) {
+        if (path.ptr()[i] == '*' || path.ptr()[i] == '?' || path.ptr()[i] == '[') { wildcard = i; break; }
+      }
+      int64_t slash = wildcard;
+      while (slash > 0 && path.ptr()[slash - 1] != '/' && path.ptr()[slash - 1] != '\\') { --slash; }
+      ObString directory(slash > 1 ? slash - 1 : slash, path.ptr());
+      OZ (ObFileScanUtils::canonicalize_path(*allocator_, directory, checked_path));
+    } else {
+      OZ (ObFileScanUtils::canonicalize_path(*allocator_, path, checked_path));
+    }
+    OZ (session_info_->get_secure_file_priv(secure_file_priv));
+    OZ (ObResolverUtils::check_secure_path(secure_file_priv, checked_path));
+    OZ (ObFileScanUtils::infer_schema(*allocator_, path, format, columns));
+  }
+
+  if (OB_SUCC(ret)) {
+    ParseNode path_arguments = *call.arguments_;
+    ParseNode *path_children[1] = {const_cast<ParseNode *>(path_node)};
+    path_arguments.num_child_ = 1;
+    path_arguments.children_ = path_children;
+    TableFunctionCall path_call = call;
+    path_call.arguments_ = &path_arguments;
+    OZ (create_function_scan_item(path_call, item));
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < columns.count(); ++i) {
+    ColumnItem *bound = nullptr;
+    OZ (resolve_function_table_column_item(*item, columns.at(i).type_.get_meta_type(),
+          columns.at(i).type_.get_accuracy(), columns.at(i).name_, OB_APP_MIN_COLUMN_ID + i, bound));
+  }
+  if (OB_SUCC(ret) && OB_NOT_NULL(params_.query_ctx_)) { params_.query_ctx_->disable_plan_cache_ = true; }
   return ret;
 }
 

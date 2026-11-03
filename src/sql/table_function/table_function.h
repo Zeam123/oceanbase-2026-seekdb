@@ -99,9 +99,15 @@ constexpr uint64_t UNNEST_FUNCTION_ID = 1;
 constexpr uint64_t GENERATOR_FUNCTION_ID = 2;
 constexpr uint64_t JSON_TABLE_FUNCTION_ID = 3;
 constexpr uint64_t HYBRID_SEARCH_FUNCTION_ID = 4;
+constexpr uint64_t READ_CSV_FUNCTION_ID = 100;
+constexpr uint64_t READ_JSON_FUNCTION_ID = 101;
+constexpr uint64_t READ_NDJSON_FUNCTION_ID = 102;
+constexpr uint64_t READ_PARQUET_FUNCTION_ID = 103;
+constexpr uint64_t GLOB_FUNCTION_ID = 104;
 
 int create_collection_table_scan(const TableFunctionScanContext &, ITableFunctionScan *&);
 int create_generator_table_scan(const TableFunctionScanContext &, ITableFunctionScan *&);
+int create_file_table_scan(const TableFunctionScanContext &, ITableFunctionScan *&);
 
 class TableFunctionRegistry
 {
