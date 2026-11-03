@@ -3579,8 +3579,12 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL is disabled; set enable_file_sql = ON");
   } else if (OB_FALSE_IT(path_node = call.arguments_->children_[0])) {
-  } else if (OB_FAIL(resolve_str_const(*path_node, path))) {
+  } else if ((path_node->type_ != T_CHAR && path_node->type_ != T_VARCHAR) ||
+             path_node->str_value_ == nullptr || path_node->str_len_ <= 0) {
+    ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL path must be a constant string");
+  } else {
+    path.assign_ptr(path_node->str_value_, path_node->str_len_);
   }
 
   // File options are structural and therefore must be constants at bind time.
@@ -3601,9 +3605,9 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
       } else if (0 == name.case_compare("header")) {
         if (value_node->type_ != T_BOOL && value_node->type_ != T_INT) { ret = OB_ERR_PARSE_SQL; }
       } else if (0 == name.case_compare("format") && call.descriptor_->id_ == READ_JSON_FUNCTION_ID) {
-        ObString value;
-        if (OB_FAIL(resolve_str_const(*value_node, value))) {
-        } else if (0 != value.case_compare("newline_delimited")) {
+        ObString value(value_node->str_len_, value_node->str_value_);
+        if ((value_node->type_ != T_CHAR && value_node->type_ != T_VARCHAR) ||
+            value_node->str_value_ == nullptr || 0 != value.case_compare("newline_delimited")) {
           ret = OB_ERR_PARSE_SQL;
         }
       } else {
