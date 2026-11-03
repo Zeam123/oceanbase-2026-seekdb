@@ -137,13 +137,13 @@ InferredKind widen(InferredKind current, InferredKind value)
 void set_data_type(InferredKind kind, ObDataType &type)
 {
   switch (kind) {
-    case IK_BOOL: type.set_tinyint(); break;
+    case IK_BOOL: type.set_obj_type(ObTinyIntType); break;
     case IK_INT: type.set_int(); break;
-    case IK_DOUBLE: type.set_double(); break;
-    case IK_DATE: type.set_date(); break;
-    case IK_DATETIME: type.set_datetime(); break;
+    case IK_DOUBLE: type.set_obj_type(ObDoubleType); break;
+    case IK_DATE: type.set_obj_type(ObDateType); break;
+    case IK_DATETIME: type.set_obj_type(ObDateTimeType); break;
     default:
-      type.set_varchar();
+      type.set_obj_type(ObVarcharType);
       type.set_collation_type(CS_TYPE_UTF8MB4_BIN);
       type.set_collation_level(CS_LEVEL_IMPLICIT);
       type.set_accuracy(ObAccuracy::DDL_DEFAULT_ACCURACY[ObVarcharType]);
