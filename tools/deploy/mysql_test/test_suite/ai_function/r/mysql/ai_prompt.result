@@ -180,6 +180,16 @@ ai_prompt('1+1=?{0}','')
 select ai_prompt('\0');
 ai_prompt('\0')
 {"args": [], "template": "\u0000"}
+select ai_prompt('{0}/{0}/{1}', json_array(1,true), json_object('k',2));
+ai_prompt('{0}/{0}/{1}', json_array(1,true), json_object('k',2))
+{"args": [[1, true], {"k": 2}], "template": "{0}/{0}/{1}"}
+select ai_prompt('你好 {0} {name} \\ "', json_object('text','世界'));
+ai_prompt('你好 {0} {name} \\ "', json_object('text','世界'))
+{"args": [{"text": "世界"}], "template": "你好 {0} {name} \\ \""}
+select ai_prompt('{1}', 'only-zero');
+ERROR HY000: Invalid argument
+select ai_prompt('{999999999999999999999999999999999999}', 'overflow');
+ERROR HY000: Invalid argument
 drop table if exists t1;
 create table t1 (nr int, a varchar(10), b BINARY(20), d int);
 insert into t1 values( 1, 'b', "oExGTLHmkvIGQekFkd" , 10);

@@ -164,6 +164,16 @@ select ai_prompt('1+1=?{0}','');
 # 带转义的字符，最后转成unicode
 select ai_prompt('\0');
 
+# JSON 参数保留结构，重复占位符可重复展开，Unicode 和普通花括号保持原样
+select ai_prompt('{0}/{0}/{1}', json_array(1,true), json_object('k',2));
+select ai_prompt('你好 {0} {name} \\ "', json_object('text','世界'));
+
+# 数字占位符越界或溢出必须报参数错误
+--error 1210
+select ai_prompt('{1}', 'only-zero');
+--error 1210
+select ai_prompt('{999999999999999999999999999999999999}', 'overflow');
+
 
 # select
 
