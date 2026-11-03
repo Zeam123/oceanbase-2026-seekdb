@@ -1,4 +1,9 @@
 {
+  "parquet_reader": {
+    "crate": "parquet-reader",
+    "headers": {},
+    "deps": []
+  },
   "sql_nio": {
     "crate": "sql-nio",
     "headers": {},

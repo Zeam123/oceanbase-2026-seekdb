@@ -10,6 +10,7 @@
 #include "common/json_type/ob_json_tree.h"
 #include "common/timezone/ob_time_convert.h"
 #include "lib/string/ob_string.h"
+#include "parquet_reader.h"
 #include <cerrno>
 #include <cctype>
 #include <cstdlib>
@@ -286,6 +287,49 @@ int infer_jsonl(ObIAllocator &allocator, const ObString &path, ObIArray<ObFileTa
   return ret;
 }
 
+int infer_parquet(ObIAllocator &allocator, const ObString &path,
+                  ObIArray<ObFileTableColumn> &columns)
+{
+  int ret = OB_SUCCESS;
+  std::string source(path.ptr(), path.length());
+  parquet::ParquetReaderHandle *reader = parquet::parquet_reader_open(source.c_str());
+  if (reader == nullptr) {
+    ret = OB_INVALID_DATA;
+  } else {
+    const size_t count = parquet::parquet_reader_column_count(reader);
+    if (count == 0) { ret = OB_INVALID_DATA; }
+    for (size_t i = 0; OB_SUCC(ret) && i < count; ++i) {
+      const char *name = parquet::parquet_reader_column_name(reader, i);
+      const int kind = static_cast<int>(parquet::parquet_reader_column_kind(reader, i));
+      if (name == nullptr || name[0] == '\0') {
+        ret = OB_INVALID_DATA;
+      } else {
+        ObFileTableColumn column;
+        OZ (copy_name(allocator, name, column.name_));
+        switch (kind) {
+          case 1: column.type_.set_obj_type(ObTinyIntType); break;
+          case 2: column.type_.set_int(); break;
+          case 3: column.type_.set_obj_type(ObDoubleType); break;
+          case 5: column.type_.set_obj_type(ObDateType); break;
+          case 6:
+          case 7: column.type_.set_obj_type(ObDateTimeType); break;
+          case 4:
+            column.type_.set_obj_type(ObVarcharType);
+            column.type_.set_collation_type(CS_TYPE_UTF8MB4_BIN);
+            column.type_.set_collation_level(CS_LEVEL_IMPLICIT);
+            column.type_.set_accuracy(ObAccuracy::DDL_DEFAULT_ACCURACY[ObVarcharType]);
+            break;
+          default: ret = OB_NOT_SUPPORTED; break;
+        }
+        column.nullable_ = parquet::parquet_reader_column_nullable(reader, i);
+        OZ (columns.push_back(column));
+      }
+    }
+    parquet::parquet_reader_close(reader);
+  }
+  return ret;
+}
+
 int text_to_obj(const std::string &text, const ObObjType type, ObIAllocator &allocator, ObObj &value)
 {
   int ret = OB_SUCCESS;
@@ -312,7 +356,7 @@ public:
                                 (context.descriptor_.id_ == READ_JSON_FUNCTION_ID ||
                                  context.descriptor_.id_ == READ_NDJSON_FUNCTION_ID) ? FILE_TABLE_JSONL :
                                 context.descriptor_.id_ == READ_PARQUET_FUNCTION_ID ? FILE_TABLE_PARQUET : FILE_TABLE_GLOB),
-      input_(), row_allocator_("FileTableRow"), record_(0) {}
+      input_(), parquet_reader_(nullptr), row_allocator_("FileTableRow"), record_(0) {}
   int open() override { return rescan(arguments_); }
   int rescan(const ObIArray<ObObj> &arguments) override
   {
@@ -323,7 +367,11 @@ public:
     else {
       path_ = arguments.at(0).get_string();
       OZ (ObFileScanUtils::infer_schema(allocator_, path_, format_, columns_));
-      if (OB_SUCC(ret) && format_ != FILE_TABLE_GLOB) {
+      if (OB_SUCC(ret) && format_ == FILE_TABLE_PARQUET) {
+        std::string source(path_.ptr(), path_.length());
+        parquet_reader_ = parquet::parquet_reader_open(source.c_str());
+        if (parquet_reader_ == nullptr) { ret = OB_INVALID_DATA; }
+      } else if (OB_SUCC(ret) && format_ != FILE_TABLE_GLOB) {
         input_.open(std::string(path_.ptr(), path_.length()), std::ios::binary);
         if (!input_.is_open()) { ret = OB_FILE_NOT_OPENED; }
         else if (format_ == FILE_TABLE_CSV) { std::vector<std::string> header; if (!read_csv_record(input_, header, record_)) ret = OB_INVALID_DATA; }
@@ -382,6 +430,52 @@ public:
         else { ret = OB_NOT_SUPPORTED; }
         OZ (cells_.push_back(value));
       }
+    } else if (format_ == FILE_TABLE_PARQUET) {
+      const char *json = nullptr;
+      const int status = parquet::parquet_reader_next(parquet_reader_, &json);
+      if (status > 0) { return OB_ITER_END; }
+      if (status < 0 || json == nullptr) { return OB_INVALID_DATA; }
+      ObArenaAllocator json_allocator("FileParquetRow");
+      ObJsonObject *object = nullptr;
+      OZ (parse_json_object(json_allocator, json, object));
+      for (int64_t i = 0; OB_SUCC(ret) && i < projection_.count(); ++i) {
+        const int64_t index = projection_.at(i) - OB_APP_MIN_COLUMN_ID;
+        if (index < 0 || index >= columns_.count()) {
+          ret = OB_ERR_UNEXPECTED;
+        } else {
+          ObObj value;
+          ObJsonNode *node = object->get_value(columns_.at(index).name_);
+          if (node == nullptr || node->json_type() == ObJsonNodeType::J_NULL) {
+            value.set_null();
+          } else if (node->json_type() == ObJsonNodeType::J_BOOLEAN) {
+            value.set_tinyint(static_cast<ObJsonBoolean *>(node)->value());
+          } else if (node->json_type() == ObJsonNodeType::J_INT) {
+            value.set_int(static_cast<ObJsonInt *>(node)->value());
+          } else if (node->json_type() == ObJsonNodeType::J_UINT) {
+            const uint64_t number = static_cast<ObJsonUint *>(node)->value();
+            if (number > static_cast<uint64_t>(INT64_MAX)) { ret = OB_DATA_OUT_OF_RANGE; }
+            else { value.set_int(static_cast<int64_t>(number)); }
+          } else if (node->json_type() == ObJsonNodeType::J_DOUBLE) {
+            value.set_double(static_cast<ObJsonDouble *>(node)->value());
+          } else if (node->json_type() == ObJsonNodeType::J_STRING) {
+            const ObString &text = static_cast<ObJsonString *>(node)->value();
+            std::string parquet_text(text.ptr(), text.length());
+            const ObObjType type = columns_.at(index).type_.get_obj_type();
+            // The Parquet reader renders timestamps in UTC. DATETIME has no zone suffix.
+            const std::string utc_suffix = " +00:00";
+            if (type == ObDateTimeType &&
+                parquet_text.size() >= utc_suffix.size() &&
+                parquet_text.compare(parquet_text.size() - utc_suffix.size(),
+                                     utc_suffix.size(), utc_suffix) == 0) {
+              parquet_text.resize(parquet_text.size() - utc_suffix.size());
+            }
+            OZ (text_to_obj(parquet_text, type, row_allocator_, value));
+          } else {
+            ret = OB_NOT_SUPPORTED;
+          }
+          OZ (cells_.push_back(value));
+        }
+      }
     } else { ret = OB_NOT_SUPPORTED; }
     if (OB_SUCC(ret)) { row_.cells_ = cells_.get_data(); row_.count_ = cells_.count(); row = &row_; }
     return ret;
@@ -389,6 +483,10 @@ public:
   int close() override
   {
     if (input_.is_open()) { input_.close(); }
+    if (parquet_reader_ != nullptr) {
+      parquet::parquet_reader_close(parquet_reader_);
+      parquet_reader_ = nullptr;
+    }
     paths_.clear();
     position_ = 0;
     record_ = 0;
@@ -402,6 +500,7 @@ private:
   ObString path_;
   ObSEArray<ObFileTableColumn, 16> columns_;
   std::ifstream input_;
+  parquet::ParquetReaderHandle *parquet_reader_;
   std::vector<std::string> paths_;
   size_t position_ = 0;
   ObArenaAllocator row_allocator_;
@@ -433,6 +532,7 @@ int ObFileScanUtils::infer_schema(ObIAllocator &allocator, const ObString &path,
   columns.reuse();
   if (format == FILE_TABLE_CSV) { ret = infer_csv(allocator, path, columns); }
   else if (format == FILE_TABLE_JSONL) { ret = infer_jsonl(allocator, path, columns); }
+  else if (format == FILE_TABLE_PARQUET) { ret = infer_parquet(allocator, path, columns); }
   else if (format == FILE_TABLE_GLOB) {
     ObFileTableColumn column;
     OZ (copy_name(allocator, "file", column.name_));
