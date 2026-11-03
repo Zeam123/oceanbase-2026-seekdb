@@ -497,8 +497,7 @@ END_P SET_VAR DELIMITER
 %type <node> dynamic_sampling_hint
 %type <node> skip_index_type opt_skip_index_type_list
 %type <node> vec_index_params vec_index_param vec_index_param_value opt_with_vector_index_parameters
-%type <node> table_function_expr table_function_arguments table_function_argument
-%type <node> table_function_argument_list table_function_column_aliases
+%type <node> table_function_expr table_function_arguments table_function_column_aliases
 %type <node> json_table_expr mock_jt_on_error_on_empty jt_column_list json_table_column_def
 %type <node> json_table_ordinality_column_def json_table_exists_column_def json_table_value_column_def json_table_nested_column_def
 %type <node> opt_value_on_empty_or_error_or_mismatch opt_on_mismatch
@@ -17427,31 +17426,9 @@ table_function_column_aliases:
 | '(' relation_name_list ')' { $$ = $2; }
 ;
 
-table_function_argument:
-simple_expr
-{
-  $$ = $1;
-}
-| relation_name COMP_EQ simple_expr
-{
-  malloc_non_terminal_node($$, result->malloc_pool_, T_OP_EQ, 2, $1, $3);
-}
-;
-
-table_function_argument_list:
-table_function_argument
-{
-  malloc_list_node($$, result->malloc_pool_, T_EXPR_LIST, 2, 1, $1);
-}
-| table_function_argument_list ',' table_function_argument
-{
-  push_back_list(result->malloc_pool_, result, $$, $1, $3);
-}
-;
-
 table_function_arguments:
 /* empty */ { $$ = NULL; }
-| table_function_argument_list { $$ = $1; }
+| expr_list { $$ = $1; }
 ;
 
 table_function_expr:
