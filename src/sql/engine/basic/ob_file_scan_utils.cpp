@@ -307,12 +307,13 @@ class FileTableScan final : public ITableFunctionScan
 {
 public:
   explicit FileTableScan(const TableFunctionScanContext &context)
-    : context_(context), format_(context.descriptor_.id_ == READ_CSV_FUNCTION_ID ? FILE_TABLE_CSV :
+    : allocator_(context.allocator_), arguments_(context.arguments_), projection_(context.column_ids_),
+      format_(context.descriptor_.id_ == READ_CSV_FUNCTION_ID ? FILE_TABLE_CSV :
                                 (context.descriptor_.id_ == READ_JSON_FUNCTION_ID ||
                                  context.descriptor_.id_ == READ_NDJSON_FUNCTION_ID) ? FILE_TABLE_JSONL :
                                 context.descriptor_.id_ == READ_PARQUET_FUNCTION_ID ? FILE_TABLE_PARQUET : FILE_TABLE_GLOB),
       input_(), row_allocator_("FileTableRow"), record_(0) {}
-  int open() override { return rescan(context_.arguments_); }
+  int open() override { return rescan(arguments_); }
   int rescan(const ObIArray<ObObj> &arguments) override
   {
     int ret = close();
@@ -321,7 +322,7 @@ public:
     } else if (arguments.empty() || arguments.at(0).is_null()) { ret = OB_INVALID_ARGUMENT; }
     else {
       path_ = arguments.at(0).get_string();
-      OZ (ObFileScanUtils::infer_schema(context_.allocator_, path_, format_, columns_));
+      OZ (ObFileScanUtils::infer_schema(allocator_, path_, format_, columns_));
       if (OB_SUCC(ret) && format_ != FILE_TABLE_GLOB) {
         input_.open(std::string(path_.ptr(), path_.length()), std::ios::binary);
         if (!input_.is_open()) { ret = OB_FILE_NOT_OPENED; }
@@ -354,8 +355,8 @@ public:
       std::vector<std::string> fields;
       if (!read_csv_record(input_, fields, record_)) { return input_.eof() ? OB_ITER_END : OB_INVALID_DATA; }
       if (fields.size() != static_cast<size_t>(columns_.count())) { return OB_INVALID_DATA; }
-      for (int64_t i = 0; OB_SUCC(ret) && i < context_.column_ids_.count(); ++i) {
-        int64_t index = context_.column_ids_.at(i) - OB_APP_MIN_COLUMN_ID;
+      for (int64_t i = 0; OB_SUCC(ret) && i < projection_.count(); ++i) {
+        int64_t index = projection_.at(i) - OB_APP_MIN_COLUMN_ID;
         if (index < 0 || index >= columns_.count()) { ret = OB_ERR_UNEXPECTED; }
         else { ObObj value; OZ (text_to_obj(fields[index], columns_.at(index).type_.get_obj_type(), row_allocator_, value)); OZ (cells_.push_back(value)); }
       }
@@ -365,8 +366,8 @@ public:
       ObArenaAllocator json_allocator("FileJsonRow");
       ObJsonObject *object = nullptr;
       OZ (parse_json_object(json_allocator, line, object));
-      for (int64_t i = 0; OB_SUCC(ret) && i < context_.column_ids_.count(); ++i) {
-        int64_t index = context_.column_ids_.at(i) - OB_APP_MIN_COLUMN_ID;
+      for (int64_t i = 0; OB_SUCC(ret) && i < projection_.count(); ++i) {
+        int64_t index = projection_.at(i) - OB_APP_MIN_COLUMN_ID;
         ObObj value;
         ObJsonNode *node = index >= 0 && index < columns_.count() ? object->get_value(columns_.at(index).name_) : nullptr;
         if (node == nullptr || node->json_type() == ObJsonNodeType::J_NULL) { value.set_null(); }
@@ -394,7 +395,9 @@ public:
     return OB_SUCCESS;
   }
 private:
-  const TableFunctionScanContext &context_;
+  ObIAllocator &allocator_;
+  const ObIArray<ObObj> &arguments_;
+  const ObIArray<uint64_t> &projection_;
   ObFileTableFormat format_;
   ObString path_;
   ObSEArray<ObFileTableColumn, 16> columns_;

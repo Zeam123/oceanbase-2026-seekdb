@@ -3522,8 +3522,9 @@ int ObDMLResolver::create_function_scan_item(const TableFunctionCall &call, Tabl
   if (OB_SUCC(ret) && OB_ISNULL(item = get_stmt()->create_table_item(*allocator_))) {
     ret = OB_ALLOCATE_MEMORY_FAILED;
   }
-  OZ (params_.expr_factory_->create_raw_expr(T_OP_ROW, arguments));
   const int64_t argc = call.arguments_ == nullptr ? 0 : call.arguments_->num_child_;
+  OZ (params_.expr_factory_->create_raw_expr(T_OP_ROW, arguments));
+  OZ (arguments->init_param_exprs(argc));
   for (int64_t i = 0; OB_SUCC(ret) && i < argc; ++i) {
     ObRawExpr *arg = nullptr;
     const bool old = params_.is_resolve_table_function_expr_;
