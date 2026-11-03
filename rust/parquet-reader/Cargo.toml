@@ -1,0 +1,17 @@
+[package]
+name = "parquet-reader"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Streaming Apache Parquet reader for seekdb file SQL"
+
+[lib]
+name = "parquet_reader"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+parquet = { version = "60", default-features = false, features = ["json", "snap"] }
+serde_json = "1"
+
+[build-dependencies]
+cbindgen = "=0.29.4"
