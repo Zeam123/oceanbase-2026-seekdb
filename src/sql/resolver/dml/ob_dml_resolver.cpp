@@ -3570,6 +3570,34 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
   ObString secure_file_priv;
   ObFileTableFormat format = FILE_TABLE_CSV;
   ObSEArray<ObFileTableColumn, 16> columns;
+  auto resolve_string_argument = [this](const ParseNode *node, ObString &value) -> int {
+    int tmp_ret = OB_SUCCESS;
+    if (OB_ISNULL(node)) {
+      tmp_ret = OB_INVALID_ARGUMENT;
+    } else if (node->type_ == T_CHAR || node->type_ == T_VARCHAR) {
+      if (node->str_value_ == nullptr || node->str_len_ <= 0) {
+        tmp_ret = OB_INVALID_ARGUMENT;
+      } else {
+        value.assign_ptr(node->str_value_, node->str_len_);
+      }
+    } else if (node->type_ == T_QUESTIONMARK) {
+      const int64_t param_idx = node->value_;
+      if (OB_ISNULL(params_.param_list_) || param_idx < 0 ||
+          param_idx >= params_.param_list_->count()) {
+        tmp_ret = OB_INVALID_ARGUMENT;
+      } else {
+        const ObObjParam &param = params_.param_list_->at(param_idx);
+        if (!param.is_string_type() || param.get_string().empty()) {
+          tmp_ret = OB_INVALID_ARGUMENT;
+        } else {
+          value = param.get_string();
+        }
+      }
+    } else {
+      tmp_ret = OB_INVALID_ARGUMENT;
+    }
+    return tmp_ret;
+  };
 
   if (OB_ISNULL(call.descriptor_) || OB_ISNULL(call.arguments_) ||
       call.arguments_->num_child_ < 1 || OB_ISNULL(call.arguments_->children_[0])) {
@@ -3579,12 +3607,9 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL is disabled; set enable_file_sql = ON");
   } else if (OB_FALSE_IT(path_node = call.arguments_->children_[0])) {
-  } else if ((path_node->type_ != T_CHAR && path_node->type_ != T_VARCHAR) ||
-             path_node->str_value_ == nullptr || path_node->str_len_ <= 0) {
+  } else if (OB_SUCCESS != resolve_string_argument(path_node, path)) {
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL path must be a constant string");
-  } else {
-    path.assign_ptr(path_node->str_value_, path_node->str_len_);
   }
 
   // File options are structural and therefore must be constants at bind time.
@@ -3605,9 +3630,9 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
       } else if (0 == name.case_compare("header")) {
         if (value_node->type_ != T_BOOL && value_node->type_ != T_INT) { ret = OB_ERR_PARSE_SQL; }
       } else if (0 == name.case_compare("format") && call.descriptor_->id_ == READ_JSON_FUNCTION_ID) {
-        ObString value(value_node->str_len_, value_node->str_value_);
-        if ((value_node->type_ != T_CHAR && value_node->type_ != T_VARCHAR) ||
-            value_node->str_value_ == nullptr || 0 != value.case_compare("newline_delimited")) {
+        ObString value;
+        if (OB_SUCCESS != resolve_string_argument(value_node, value) ||
+            0 != value.case_compare("newline_delimited")) {
           ret = OB_ERR_PARSE_SQL;
         }
       } else {
