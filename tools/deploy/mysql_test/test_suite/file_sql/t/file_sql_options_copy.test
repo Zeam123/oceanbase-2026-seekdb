@@ -1,0 +1,45 @@
+# Regression for parameterized file options, schema descriptions and COPY.
+--source mysql_test/test_suite/file_sql/include/copy_file_sql_data.inc
+--disable_query_log
+let $FILE_SQL_DATA_DIR = $OBSERVER_DIR/data_for_mysqltest_file_sql;
+set session enable_file_sql = ON;
+
+--echo # Three named arguments and negative sample_size
+eval select count(*) AS n, sum(id) AS id_sum
+       from read_csv('$FILE_SQL_DATA_DIR/basic.csv', header = true, sample_size = -1);
+eval select count(*) AS n, sum(id) AS id_sum
+       from read_csv('$FILE_SQL_DATA_DIR/basic.csv', sample_size = (-1), header = true);
+--error 1235
+eval select * from read_csv('$FILE_SQL_DATA_DIR/basic.csv', sample_size = 10);
+
+--echo # Schema only
+eval describe select * from read_csv('$FILE_SQL_DATA_DIR/basic.csv');
+
+--echo # Header and NULL text round trip
+eval copy (select id, name, score from read_csv('$FILE_SQL_DATA_DIR/basic.csv') order by id)
+       to '$FILE_SQL_DATA_DIR/export.csv' (format csv, header, nullstr 'NULL');
+eval select * from read_csv('$FILE_SQL_DATA_DIR/export.csv') order by id;
+
+--echo # Reject an existing target
+--error 1086
+eval copy (select 1 as id) to '$FILE_SQL_DATA_DIR/export.csv' (header);
+eval select count(*) AS original_rows from read_csv('$FILE_SQL_DATA_DIR/export.csv');
+
+--echo # Table source
+create table file_sql_copy_source (id bigint, name varchar(20));
+insert into file_sql_copy_source values (1, 'a,b'), (2, 'say "hi"'), (3, null);
+eval copy file_sql_copy_source to '$FILE_SQL_DATA_DIR/table-copy.csv'
+       (format csv, header, nullstr 'NULL');
+eval select * from read_csv('$FILE_SQL_DATA_DIR/table-copy.csv') order by id;
+drop table file_sql_copy_source;
+
+--echo # Failed query must leave no published target
+--error 3141
+eval copy (select json_extract(note, '$') as value
+             from read_csv('$FILE_SQL_DATA_DIR/basic.csv'))
+       to '$FILE_SQL_DATA_DIR/failed-copy.csv' (header);
+eval select count(*) AS failed_targets from glob('$FILE_SQL_DATA_DIR/failed-copy.csv');
+
+set session enable_file_sql = OFF;
+--enable_query_log
+--source mysql_test/test_suite/file_sql/include/remove_file_sql_data.inc

@@ -1,0 +1,31 @@
+# Three named arguments and negative sample_size
+n	id_sum
+3	6
+n	id_sum
+3	6
+# Schema only
+column_name	column_type	null	key	default	extra
+id	BIGINT	NO	NULL	NULL	NULL
+name	VARCHAR	NO	NULL	NULL	NULL
+score	DOUBLE	NO	NULL	NULL	NULL
+active	BOOLEAN	NO	NULL	NULL	NULL
+day	DATE	YES	NULL	NULL	NULL
+created	DATETIME	YES	NULL	NULL	NULL
+note	VARCHAR	NO	NULL	NULL	NULL
+id__2	BIGINT	NO	NULL	NULL	NULL
+# Header and NULL text round trip
+id	name	score
+1	Alice	98.5
+2	Bob	87
+3	Chen	90.25
+# Reject an existing target
+original_rows
+3
+# Table source
+id	name
+1	a,b
+2	say "hi"
+3	NULL
+# Failed query must leave no published target
+failed_targets
+0

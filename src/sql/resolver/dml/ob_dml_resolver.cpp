@@ -3614,6 +3614,30 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
   }
 
   // File options are structural and therefore must be constants at bind time.
+  auto resolve_integer_argument = [this](const ParseNode *node, int64_t &value) -> int {
+    int tmp_ret = OB_SUCCESS;
+    bool negative = false;
+    if (node != nullptr && node->type_ == T_OP_NEG && node->num_child_ == 1) {
+      negative = true;
+      node = node->children_[0];
+    }
+    if (node == nullptr) {
+      tmp_ret = OB_INVALID_ARGUMENT;
+    } else if (node->type_ == T_INT || node->type_ == T_BOOL) {
+      value = node->value_;
+    } else if (node->type_ == T_QUESTIONMARK && params_.param_list_ != nullptr &&
+               node->value_ >= 0 && node->value_ < params_.param_list_->count() &&
+               ob_is_integer_type(params_.param_list_->at(node->value_).get_type())) {
+      value = params_.param_list_->at(node->value_).get_int();
+    } else {
+      tmp_ret = OB_INVALID_ARGUMENT;
+    }
+    if (tmp_ret == OB_SUCCESS && negative) {
+      if (value == INT64_MIN) { tmp_ret = OB_INVALID_ARGUMENT; }
+      else { value = -value; }
+    }
+    return tmp_ret;
+  };
   for (int64_t i = 1; OB_SUCC(ret) && i < call.arguments_->num_child_; ++i) {
     const ParseNode *option = call.arguments_->children_[i];
     if (OB_ISNULL(option) || option->type_ != T_OP_EQ || option->num_child_ != 2 ||
@@ -3627,9 +3651,16 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
       }
       ObString name(name_node->str_len_, name_node->str_value_);
       if (0 == name.case_compare("sample_size")) {
-        if (value_node->type_ != T_INT || value_node->value_ != -1) { ret = OB_NOT_SUPPORTED; }
+        int64_t sample_size = 0;
+        if (resolve_integer_argument(value_node, sample_size) != OB_SUCCESS ||
+            sample_size != -1) { ret = OB_NOT_SUPPORTED; }
       } else if (0 == name.case_compare("header")) {
-        if (value_node->type_ != T_BOOL && value_node->type_ != T_INT) { ret = OB_ERR_PARSE_SQL; }
+        int64_t header = 0;
+        if (resolve_integer_argument(value_node, header) != OB_SUCCESS) {
+          ret = OB_ERR_PARSE_SQL;
+        } else if (header != 1) {
+          ret = OB_NOT_SUPPORTED;
+        }
       } else if (0 == name.case_compare("format") && call.descriptor_->id_ == READ_JSON_FUNCTION_ID) {
         ObString value;
         if (OB_SUCCESS != resolve_string_argument(value_node, value) ||
@@ -3680,6 +3711,13 @@ int ObDMLResolver::bind_file_table_function(const TableFunctionCall &call, Table
     ColumnItem *bound = nullptr;
     OZ (resolve_function_table_column_item(*item, columns.at(i).type_.get_meta_type(),
           columns.at(i).type_.get_accuracy(), columns.at(i).name_, OB_APP_MIN_COLUMN_ID + i, bound));
+    if (OB_SUCC(ret) && bound != nullptr && bound->expr_ != nullptr) {
+      if (columns.at(i).nullable_) {
+        bound->expr_->unset_result_flag(NOT_NULL_FLAG);
+      } else {
+        bound->expr_->set_result_flag(NOT_NULL_FLAG);
+      }
+    }
   }
   if (OB_SUCC(ret) && OB_NOT_NULL(params_.query_ctx_)) { params_.query_ctx_->disable_plan_cache_ = true; }
   return ret;

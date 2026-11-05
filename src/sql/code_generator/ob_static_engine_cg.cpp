@@ -5487,6 +5487,15 @@ int ObStaticEngineCG::generate_spec(ObLogSelectInto &op, ObSelectIntoSpec &spec,
       spec.parallel_ = op.get_parallel();
       spec.is_overwrite_ = op.get_is_overwrite();
       spec.plan_->need_drive_dml_query_ = true;
+      if (op.get_stmt() != nullptr && op.get_stmt()->is_select_stmt()) {
+        const ObSelectIntoItem *item =
+            static_cast<const ObSelectStmt *>(op.get_stmt())->get_select_into();
+        if (item != nullptr) {
+          spec.copy_csv_ = item->copy_csv_;
+          spec.copy_header_ = item->copy_header_;
+          OZ (ob_write_string(alloc, item->copy_null_, spec.copy_null_));
+        }
+      }
     }
   }
   return ret;

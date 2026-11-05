@@ -419,10 +419,29 @@ public:
         ObObj value;
         ObJsonNode *node = index >= 0 && index < columns_.count() ? object->get_value(columns_.at(index).name_) : nullptr;
         if (node == nullptr || node->json_type() == ObJsonNodeType::J_NULL) { value.set_null(); }
-        else if (node->json_type() == ObJsonNodeType::J_BOOLEAN) { value.set_tinyint(static_cast<ObJsonBoolean *>(node)->value()); }
-        else if (node->json_type() == ObJsonNodeType::J_INT) { value.set_int(static_cast<ObJsonInt *>(node)->value()); }
-        else if (node->json_type() == ObJsonNodeType::J_UINT) { value.set_int(static_cast<int64_t>(static_cast<ObJsonUint *>(node)->value())); }
-        else if (node->json_type() == ObJsonNodeType::J_DOUBLE) { value.set_double(static_cast<ObJsonDouble *>(node)->value()); }
+        else if (node->json_type() == ObJsonNodeType::J_BOOLEAN) {
+          OZ (text_to_obj(static_cast<ObJsonBoolean *>(node)->value() ? "true" : "false",
+                          columns_.at(index).type_.get_obj_type(), row_allocator_, value));
+        }
+        else if (node->json_type() == ObJsonNodeType::J_INT) {
+          OZ (text_to_obj(std::to_string(static_cast<ObJsonInt *>(node)->value()),
+                                 columns_.at(index).type_.get_obj_type(), row_allocator_, value));
+        }
+        else if (node->json_type() == ObJsonNodeType::J_UINT) {
+          OZ (text_to_obj(std::to_string(static_cast<ObJsonUint *>(node)->value()),
+                                 columns_.at(index).type_.get_obj_type(), row_allocator_, value));
+        }
+        else if (node->json_type() == ObJsonNodeType::J_DOUBLE) {
+          char buffer[64];
+          const int length = snprintf(buffer, sizeof(buffer), "%.17g",
+                                      static_cast<ObJsonDouble *>(node)->value());
+          if (length <= 0 || length >= static_cast<int>(sizeof(buffer))) {
+            ret = OB_INVALID_DATA;
+          } else {
+            OZ (text_to_obj(std::string(buffer, length),
+                                   columns_.at(index).type_.get_obj_type(), row_allocator_, value));
+          }
+        }
         else if (node->json_type() == ObJsonNodeType::J_STRING) {
           const ObString &text = static_cast<ObJsonString *>(node)->value();
           OZ (text_to_obj(std::string(text.ptr(), text.length()), columns_.at(index).type_.get_obj_type(), row_allocator_, value));

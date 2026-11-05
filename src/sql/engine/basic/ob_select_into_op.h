@@ -23,6 +23,7 @@
 #include "sql/engine/basic/ob_select_into_basic.h"
 #include "sql/engine/basic/ob_external_file_writer.h"
 #include "sql/resolver/dml/ob_select_stmt.h"
+#include <string>
 
 namespace oceanbase
 {
@@ -71,7 +72,10 @@ public:
       parallel_(1),
       buffer_size_(DEFAULT_BUFFER_SIZE),
       is_overwrite_(false),
-      external_properties_(alloc)
+      external_properties_(alloc),
+      copy_csv_(false),
+      copy_header_(false),
+      copy_null_()
   {
   }
 
@@ -91,6 +95,9 @@ public:
   int64_t buffer_size_;
   bool is_overwrite_;
   ObExternalFileFormat::StringData external_properties_;
+  bool copy_csv_;
+  bool copy_header_;
+  common::ObString copy_null_;
   static const int64_t DEFAULT_MAX_FILE_SIZE = 256LL * 1024 * 1024;
   static const int64_t DEFAULT_BUFFER_SIZE = 1LL * 1024 * 1024;
 };
@@ -126,7 +133,11 @@ public:
       external_properties_(),
       format_type_(ObExternalFileFormat::FormatType::CSV_FORMAT),
       block_id_(0),
-      need_commit_(true)
+      need_commit_(true),
+      copy_fd_(-1),
+      copy_bytes_(0),
+      copy_temp_(),
+      copy_target_()
   {
   }
 
@@ -195,6 +206,12 @@ public:
   virtual void destroy() override;
 
 private:
+  int open_copy_file();
+  int copy_csv_row();
+  int write_copy_field(const std::string &value, bool is_null);
+  int write_copy_bytes(const char *data, int64_t length);
+  int finish_copy_file();
+  void cleanup_copy_file();
   int init_env_common();
   int init_csv_env();
   void set_csv_format_options();
@@ -292,6 +309,10 @@ private:
   ObExternalFileFormat::FormatType format_type_;
   uint32_t block_id_;
   bool need_commit_;
+  int copy_fd_;
+  int64_t copy_bytes_;
+  std::string copy_temp_;
+  std::string copy_target_;
   static const int64_t SHARED_BUFFER_SIZE = 2LL * 1024 * 1024;
 
 };

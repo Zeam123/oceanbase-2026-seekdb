@@ -31,6 +31,7 @@ public:
   virtual ~ObShowResolver();
   virtual int resolve(const ParseNode &parse_tree);
   int resolve_table_function_description(const ParseNode &parse_tree);
+  int resolve_query_description(const ParseNode &query);
 protected:
 private:
   class ObSqlStrGenerator;

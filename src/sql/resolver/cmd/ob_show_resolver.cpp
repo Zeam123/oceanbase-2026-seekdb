@@ -153,8 +153,51 @@ void replace_description_call(ParseNode *&node, ParseNode *call)
 }
 }
 
+int ObShowResolver::resolve_query_description(const ParseNode &query)
+{
+  int ret = OB_SUCCESS;
+  ObResolverParams bind_params = params_;
+  ObSelectResolver binder(bind_params);
+  OZ (binder.resolve(query));
+  ObSelectStmt *bound = binder.get_select_stmt();
+  CK (bound != nullptr);
+  ObSqlString sql;
+  for (int64_t i = 0; OB_SUCC(ret) && i < bound->get_select_item_size(); ++i) {
+    const SelectItem &item = bound->get_select_item(i);
+    CK (item.expr_ != nullptr);
+    if (OB_SUCC(ret)) {
+      if (i > 0) { OZ (sql.append(" UNION ALL ")); }
+      OZ (sql.append("SELECT "));
+      OZ (append_table_function_text(sql, item.alias_name_));
+      OZ (sql.append(" AS column_name,"));
+      const char *type = nullptr;
+      switch (item.expr_->get_data_type()) {
+        case ObIntType: type = "BIGINT"; break;
+        case ObTinyIntType: type = "BOOLEAN"; break;
+        case ObDoubleType: type = "DOUBLE"; break;
+        case ObDateType: type = "DATE"; break;
+        case ObDateTimeType: type = "DATETIME"; break;
+        case ObNullType: type = "NULL"; break;
+        case ObVarcharType: type = "VARCHAR"; break;
+        default: type = ob_obj_type_str(item.expr_->get_data_type()); break;
+      }
+      OZ (append_table_function_text(sql, ObString::make_string(type)));
+      OZ (sql.append(" AS column_type,"));
+      OZ (append_table_function_text(sql, ObString::make_string(
+          (item.expr_->get_result_flag() & NOT_NULL_FLAG) != 0 ? "NO" : "YES")));
+      OZ (sql.append(" AS `null`,NULL AS `key`,NULL AS `default`,NULL AS extra"));
+    }
+  }
+  if (OB_SUCC(ret)) { ret = parse_and_resolve_select_sql(sql.string()); }
+  return ret;
+}
+
 int ObShowResolver::resolve_table_function_description(const ParseNode &node)
 {
+  if (node.type_ == T_DESCRIBE_TABLE_FUNCTION && node.num_child_ == 1 &&
+      node.children_[0] != nullptr && node.children_[0]->type_ == T_SELECT) {
+    return resolve_query_description(*node.children_[0]);
+  }
   int ret = OB_SUCCESS;
   ObSEArray<const TableFunctionDescriptor *, 16> descriptors;
   ObSEArray<ObString, 16> names;

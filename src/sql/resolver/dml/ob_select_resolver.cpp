@@ -3105,7 +3105,9 @@ int ObSelectResolver::resolve_into_clause(const ParseNode *node)
       new(into_item) ObSelectIntoItem();
       into_item->into_type_ = node->type_;
       if (T_INTO_OUTFILE == node->type_) { // into outfile
-        if (is_in_set_query()) {
+        if (node->num_child_ == 2 && node->value_ == 1) {
+          ret = resolve_file_copy(*node, *into_item);
+        } else if (is_in_set_query()) {
           ret = OB_INAPPROPRIATE_INTO;
         } else if (node->num_child_ == 3 && NULL != node->children_[1]
             && T_EXTERNAL_FILE_FORMAT == node->children_[1]->type_) { // Handle with `FORMAT`
@@ -3137,6 +3139,94 @@ int ObSelectResolver::resolve_into_clause(const ParseNode *node)
   return ret;
 }
 
+
+int ObSelectResolver::resolve_file_copy(const ParseNode &node, ObSelectIntoItem &item)
+{
+  int ret = OB_SUCCESS;
+  bool enabled = false;
+  OZ (session_info_->get_sys_variable(share::SYS_VAR_ENABLE_FILE_SQL, enabled));
+  if (OB_SUCC(ret) && !enabled) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "file SQL is disabled; set enable_file_sql = ON");
+  }
+  item.copy_csv_ = true;
+  item.field_str_.set_varchar(",");
+  item.closed_cht_.set_char_value("\"", 1);
+  item.escaped_cht_.set_char_value("\"", 1);
+  OZ (resolve_into_const_node(node.children_[0], item.outfile_name_));
+  const ParseNode *options = node.children_[1];
+  auto option_string = [this](const ParseNode *value, ObString &text) -> int {
+    if (value == nullptr) { return OB_INVALID_ARGUMENT; }
+    if (value->type_ == T_CHAR || value->type_ == T_VARCHAR) {
+      text.assign_ptr(value->str_value_, value->str_len_);
+    } else if (value->type_ == T_QUESTIONMARK && params_.param_list_ != nullptr &&
+               value->value_ >= 0 && value->value_ < params_.param_list_->count() &&
+               params_.param_list_->at(value->value_).is_string_type()) {
+      text = params_.param_list_->at(value->value_).get_string();
+    } else {
+      return OB_INVALID_ARGUMENT;
+    }
+    return OB_SUCCESS;
+  };
+  ObSEArray<ObString, 8> seen;
+  for (int64_t i = 0; OB_SUCC(ret) && options != nullptr && i < options->num_child_; ++i) {
+    const ParseNode *option = options->children_[i];
+    if (option == nullptr || option->num_child_ != 2 || option->children_[0] == nullptr) {
+      ret = OB_ERR_PARSE_SQL;
+    } else {
+      const ParseNode *key = option->children_[0];
+      const ParseNode *value = option->children_[1];
+      const ObString name(key->str_len_, key->str_value_);
+      ObString text;
+      for (int64_t j = 0; OB_SUCC(ret) && j < seen.count(); ++j) {
+        if (name.case_compare(seen.at(j)) == 0) { ret = OB_INVALID_ARGUMENT; }
+      }
+      OZ (seen.push_back(name));
+      if (OB_FAIL(ret)) {
+      } else if (name.case_compare("header") == 0 && value == nullptr) {
+        item.copy_header_ = true;
+      } else if (name.case_compare("format") == 0 && value != nullptr &&
+                 ObString(value->str_len_, value->str_value_).case_compare("csv") == 0) {
+      } else if (option_string(value, text) != OB_SUCCESS) {
+        ret = OB_INVALID_ARGUMENT;
+      } else if (name.case_compare("nullstr") == 0) {
+        OZ (ob_write_string(*allocator_, text, item.copy_null_));
+      } else if (name.case_compare("delimiter") == 0 && text.length() == 1) {
+        item.field_str_.set_varchar(text);
+      } else if (name.case_compare("quote") == 0 && text.length() == 1) {
+        item.closed_cht_.set_char_value(text.ptr(), 1);
+      } else if (name.case_compare("escape") == 0 && text.length() == 1) {
+        item.escaped_cht_.set_char_value(text.ptr(), 1);
+      } else {
+        ret = OB_INVALID_ARGUMENT;
+      }
+    }
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && item.copy_header_ &&
+       i < get_select_stmt()->get_select_item_size(); ++i) {
+    OZ (item.user_vars_.push_back(get_select_stmt()->get_select_item(i).alias_name_));
+  }
+  if (OB_SUCC(ret)) {
+    const char delimiter = item.field_str_.get_string().ptr()[0];
+    const char quote = item.closed_cht_.get_char().ptr()[0];
+    const char escape = item.escaped_cht_.get_char().ptr()[0];
+    if (delimiter == '\0' || delimiter == '\r' || delimiter == '\n' ||
+        quote == '\0' || quote == '\r' || quote == '\n' || delimiter == quote ||
+        escape == '\0' || escape == '\r' || escape == '\n') {
+      ret = OB_INVALID_ARGUMENT;
+    }
+    for (int64_t i = 0; OB_SUCC(ret) && i < item.copy_null_.length(); ++i) {
+      const char c = item.copy_null_.ptr()[i];
+      if (c == delimiter || c == quote || c == '\r' || c == '\n' || c == '\0') {
+        ret = OB_INVALID_ARGUMENT;
+      }
+    }
+  }
+  if (OB_SUCC(ret) && params_.query_ctx_ != nullptr) {
+    params_.query_ctx_->disable_plan_cache_ = true;
+  }
+  return ret;
+}
 
 int ObSelectResolver::resolve_column_ref_in_all_namespace(
   const ObQualifiedName &q_name,
