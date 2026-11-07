@@ -32,6 +32,7 @@
 #include "sql/engine/expr/ob_expr_column_conv.h"
 #include "sql/engine/expr/ob_expr_version.h"
 #include "sql/resolver/dml/ob_insert_resolver.h"
+#include "sql/resolver/dml/ob_update_resolver.h"
 #include "sql/resolver/dml/ob_inlist_resolver.h"
 #include "sql/session/ob_local_session_var.h"
 #include "sql/session/ob_basic_session_info.h"
@@ -1812,7 +1813,10 @@ int ObDMLResolver::resolve_basic_column_ref(const ObQualifiedName &q_name, ObRaw
       LOG_WARN("table item is invalid", KPC(table_item));
     } else {
       if (table_item->is_basic_table()) {
-        if (OB_FAIL(resolve_basic_column_item(*table_item, q_name.col_name_, false, column_item))) {
+        const bool worker_update = current_scope_ == T_UPDATE_SCOPE && session_info_->is_inner() &&
+                                   !session_info_->is_user_session() &&
+                                   AIColumnPublishGuard::permits(table_item->ref_id_);
+        if (OB_FAIL(resolve_basic_column_item(*table_item, q_name.col_name_, worker_update, column_item))) {
         }
       } else if (table_item->is_generated_table() || table_item->is_temp_table()) {
         if (OB_FAIL(resolve_generated_table_column_item(*table_item, q_name.col_name_, column_item))) {
@@ -2404,6 +2408,12 @@ int ObDMLResolver::resolve_basic_table_without_cte(const ParseNode &parse_tree, 
         ret = OB_TABLE_NOT_EXIST;
       } else if (!stmt->is_select_stmt() && table_schema->is_in_recyclebin()) {
         ret = OB_ERR_OPERATION_ON_RECYCLE_OBJECT;
+      } else if (!stmt->is_select_stmt() && table_schema->has_ai_columns() &&
+                 (!table_schema->is_table_with_pk() ||
+                  (stmt->get_stmt_type() != stmt::T_INSERT &&
+                   !stmt->is_delete_stmt() && !stmt->is_update_stmt()))) {
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "AI COLUMN transactional DML");
       } else if (table_schema->is_vir_table() && !stmt->is_select_stmt()) {
         ret = OB_NOT_SUPPORTED;
         LOG_USER_ERROR(OB_NOT_SUPPORTED, "DML operation on Virtual Table/Temporary Table");
@@ -2416,6 +2426,15 @@ int ObDMLResolver::resolve_basic_table_without_cte(const ParseNode &parse_tree, 
       } else if (stmt->is_select_stmt() && OB_FAIL(resolve_geo_mbr_column())) {
       } else if (NULL != index_hint_node &&
                  OB_FAIL(resolve_index_hint(*table_item, *index_hint_node))) {
+      }
+
+      if (OB_SUCC(ret) && !stmt->is_select_stmt() && table_schema->has_ai_columns()) {
+        ObDelUpdStmt *write_stmt = dynamic_cast<ObDelUpdStmt *>(stmt);
+        if (OB_ISNULL(write_stmt)) {
+          ret = OB_ERR_UNEXPECTED;
+        } else {
+          write_stmt->set_pdml_disabled();
+        }
       }
 
       if (OB_SUCCESS == ret && table_item->is_view_table_) {

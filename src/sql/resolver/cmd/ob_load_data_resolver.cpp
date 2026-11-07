@@ -197,6 +197,9 @@ int ObLoadDataResolver::resolve(const ParseNode &parse_tree)
                                                          table_name,
                                                          false/*is_index_table*/,
                                                          tschema))) {
+    } else if (tschema->has_ai_columns()) {
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "LOAD DATA with AI COLUMN");
     } else if (OB_UNLIKELY(tschema->is_view_table())) {
       ret = OB_NOT_SUPPORTED;
       LOG_USER_ERROR(OB_NOT_SUPPORTED, "load data to the view is");

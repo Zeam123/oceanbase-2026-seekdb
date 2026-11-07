@@ -2446,6 +2446,57 @@ all_ai_model_endpoint_def = dict(
 )
 def_table_schema(**all_ai_model_endpoint_def)
 
+def_table_schema(
+    owner = 'oceanbase',
+    table_name = '__all_ai_column',
+    table_id = '1131',
+    table_type = 'SYSTEM_TABLE',
+    gm_columns = ['gmt_create', 'gmt_modified'],
+    rowkey_columns = [
+        ('table_id', 'int'),
+        ('column_id', 'int')
+    ],
+    is_cluster_private = False,
+    meta_record_in_sys = False,
+    normal_columns = [
+        ('column_name', 'varchar:OB_MAX_COLUMN_NAME_LENGTH', 'false'),
+        ('definition_version', 'int', 'false'),
+        ('state_column_id', 'int', 'false'),
+        ('request_column_id', 'int', 'false'),
+        ('result_spec_column_id', 'int', 'false'),
+        ('normalized_expr', 'longtext', 'false'),
+        ('dependency_column_ids', 'longtext', 'false'),
+        ('sync_mode', 'varchar:16', 'false'),
+        ('max_retries', 'int', 'false')
+    ]
+)
+
+def_table_schema(
+    owner = 'oceanbase',
+    table_name = '__all_ai_column_task',
+    table_id = '1132',
+    table_type = 'SYSTEM_TABLE',
+    gm_columns = ['gmt_create', 'gmt_modified'],
+    rowkey_columns = [
+        ('table_id', 'int'),
+        ('request_id', 'varchar:64'),
+        ('column_id', 'int')
+    ],
+    is_cluster_private = False,
+    meta_record_in_sys = False,
+    normal_columns = [
+        ('definition_version', 'int', 'false'),
+        ('rowkey_payload', 'varbinary:OB_MAX_VARBINARY_LENGTH', 'false'),
+        ('rowkey_predicate', 'longtext', 'false'),
+        ('eligible_ts', 'timestamp', 'false'),
+        ('state', 'int', 'false'),
+        ('retry_count', 'int', 'false', 0),
+        ('lease_token', 'varchar:64', 'true'),
+        ('lease_expiry_ts', 'timestamp', 'true'),
+        ('result_payload', 'longtext', 'true'),
+        ('last_error', 'int', 'true')
+    ]
+)
 
 all_objauth_mysql_def = dict(
     owner = 'cjl476581',

@@ -398,6 +398,9 @@ int ObAlterTableResolver::resolve_action_list(const ParseNode &node)
       if (OB_ISNULL(action_node)) {
         ret = OB_ERR_UNEXPECTED;
         SQL_RESV_LOG(WARN, "invalid parse tree!", K(ret));
+      } else if (table_schema_->has_ai_columns() && action_node->type_ != T_COLUMN_ADD) {
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "altering AI COLUMN table definitions");
       } else if (FALSE_IT(alter_table_stmt->inc_alter_table_action_count())) {
       } else {
         switch (action_node->type_) {
@@ -3425,6 +3428,11 @@ int ObAlterTableResolver::resolve_add_column(const ParseNode &node, ObColumnName
         } else if (OB_FAIL(fill_column_schema_according_stat(stat, alter_column_schema))) {
         } else if (OB_FAIL(set_column_collation(alter_column_schema))) {
         }
+        if (OB_SUCC(ret) && stat.ai_column_attribute_ != nullptr) {
+          ObSEArray<uint64_t, 1> pending_ai_ids;
+          OZ (prepare_ai_column_definition(*table_schema_, stat,
+                                          pending_ai_ids, alter_column_schema));
+        }
 
         //do some check
         if (OB_SUCC(ret)) {
@@ -3529,6 +3537,9 @@ int ObAlterTableResolver::resolve_alter_table_column_definition(AlterColumnSchem
               false,
               false,
               allow_has_default))) {
+  } else if (stat.ai_column_attribute_ != nullptr && column.alter_type_ != OB_DDL_ADD_COLUMN) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "modifying an AI COLUMN definition");
   } else { // add column level constraint
     add_or_modify_check_cst_times_ += alter_table_schema.get_constraint_count() - cst_cnt;
   }

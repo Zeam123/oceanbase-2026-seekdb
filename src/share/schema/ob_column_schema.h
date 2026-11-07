@@ -50,6 +50,43 @@ const char *const STR_COLUMN_TYPE_RAW = "raw";
 const char *const STR_COLUMN_TYPE_UNKNOWN = "unknown";
 
 class ObTableSchema;
+
+struct ObAIColumnDefinition
+{
+  OB_UNIS_VERSION(1);
+public:
+  common::ObString expression_;
+  common::ObString dependencies_;
+  uint64_t state_column_id_ = 0;
+  uint64_t request_column_id_ = 0;
+  uint64_t result_spec_column_id_ = 0;
+  int64_t max_retries_ = 0;
+
+  int get_dependency_ids(common::ObIAllocator &allocator, common::ObIArray<uint64_t> &ids) const;
+
+  bool has_valid_expression() const
+  {
+    return !expression_.empty() && !dependencies_.empty() && max_retries_ >= 0;
+  }
+
+  bool is_draft() const
+  {
+    return has_valid_expression() && state_column_id_ == 0 &&
+           request_column_id_ == 0 && result_spec_column_id_ == 0;
+  }
+
+  bool is_valid() const
+  {
+    return has_valid_expression() &&
+           state_column_id_ != 0 && state_column_id_ != common::OB_INVALID_ID &&
+           request_column_id_ != 0 && request_column_id_ != common::OB_INVALID_ID &&
+           result_spec_column_id_ != 0 && result_spec_column_id_ != common::OB_INVALID_ID &&
+           state_column_id_ != request_column_id_ &&
+           state_column_id_ != result_spec_column_id_ &&
+           request_column_id_ != result_spec_column_id_;
+  }
+};
+
 class ObColumnSchemaV2 : public ObSchema
 {
   OB_UNIS_VERSION_V(1);
@@ -65,6 +102,10 @@ bool operator==(const ObColumnSchemaV2 &r) const;
 bool operator!=(const ObColumnSchemaV2 &r) const;
 
 int assign(const ObColumnSchemaV2 &src_schema);
+int set_ai_column_definition(const ObAIColumnDefinition &definition);
+const ObAIColumnDefinition &get_ai_column_definition() const { return ai_column_; }
+bool is_ai_column() const { return !ai_column_.expression_.empty(); }
+bool has_ai_column_definition_flag() const { return (column_flags_ & AI_RESULT_COLUMN_FLAG) != 0; }
 
 //set methods
   
@@ -296,7 +337,10 @@ int assign(const ObColumnSchemaV2 &src_schema);
   inline bool has_column_flag(int64_t flag) const { return column_flags_ & flag; }
   inline int64_t get_column_flags() const { return column_flags_; }
   //these column flags must be stored in __all_column
-  inline int64_t get_stored_column_flags() const { return column_flags_ & STORED_COLUMN_FLAGS_MASK; }
+  inline int64_t get_stored_column_flags() const
+  {
+    return column_flags_ & (STORED_COLUMN_FLAGS_MASK | AI_RESULT_COLUMN_FLAG);
+  }
   inline bool is_heap_alter_rowkey_column() const {return column_flags_ & HEAP_ALTER_ROWKEY_FLAG; }
   inline bool is_not_null_for_read() const {
     return !is_nullable_ || is_not_null_rely_column() || is_not_null_validate_column();
@@ -398,6 +442,7 @@ private:
   ObSkipIndexColumnAttr skip_index_attr_;
   int64_t lob_chunk_size_;
   share::ObLocalSessionVar local_session_vars_;
+  ObAIColumnDefinition ai_column_;
 };
 
 inline int32_t ObColumnSchemaV2::get_data_length() const

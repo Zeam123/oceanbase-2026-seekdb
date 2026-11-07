@@ -982,6 +982,7 @@ void ObServer::destroy()
 
     FLOG_INFO("begin to destroy ctas clean up timer");
     ctas_clean_up_timer_.destroy();
+    ai_column_timer_.destroy();
     FLOG_INFO("ctas clean up timer destroyed");
 
     FLOG_INFO("begin to destroy local management service");
@@ -1334,6 +1335,9 @@ int ObServer::start()
     if (OB_SUCC(ret) && OB_FAIL(standby_module_->start_listener())) {
       LOG_ERROR("fail to start standby gRPC service", KR(ret));
     }
+    if (OB_SUCC(ret) && OB_FAIL(ai_column_timer_.schedule(ai_column_worker_, 200 * 1000, true))) {
+      LOG_ERROR("failed to schedule AI column worker", KR(ret));
+    }
 
   int64_t start_service_time = ObTimeUtility::current_time();
   if (OB_FAIL(ret)) {
@@ -1553,6 +1557,9 @@ int ObServer::stop()
   int fail_ret = OB_SUCCESS;
   FLOG_INFO("[OBSERVER_NOTICE] stop observer begin");
   LOG_DBA_INFO_V2(OB_SERVER_STOP_BEGIN, "observer stop begin.");
+
+  ai_column_timer_.stop();
+  ai_column_timer_.wait();
 
   if (in_process_) {
     // DDL retries must observe cancellation while schema and SQL services are still available.
@@ -1942,6 +1949,7 @@ int ObServer::init_config_module()
   } else if (OB_FAIL(server_gtimer_.init("ServerGTimer", ObMemAttr("ServerGTimer")))) {
   } else if (OB_FAIL(sql_mem_timer_.init("SqlMemTimer", ObMemAttr("SqlMemTimer")))) {
   } else if (OB_FAIL(ctas_clean_up_timer_.init("CTASCleanUp", ObMemAttr("CTASCleanUp")))) {
+  } else if (OB_FAIL(ai_column_timer_.init("AIColumnWorker", ObMemAttr("AIColumnWorker")))) {
   }
 
   return ret;

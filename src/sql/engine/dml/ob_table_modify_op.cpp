@@ -989,8 +989,13 @@ int ObTableModifyOp::end_nested_session()
 }
 int ObTableModifyOp::execute_write(const char *sql)
 {
-  int ret = OB_SUCCESS;
   int64_t affected_rows = 0;
+  return execute_write(sql, affected_rows);
+}
+
+int ObTableModifyOp::execute_write(const char *sql, int64_t &affected_rows)
+{
+  int ret = OB_SUCCESS;
   if (OB_ISNULL(inner_conn_)) {
     ret = OB_NOT_INIT;
   } else if (OB_ISNULL(sql)) {

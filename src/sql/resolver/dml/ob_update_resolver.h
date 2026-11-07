@@ -25,6 +25,23 @@ namespace oceanbase
 {
 namespace sql
 {
+// Scoped to the native worker's write on its internal SQL connection.
+class AIColumnPublishGuard
+{
+public:
+  explicit AIColumnPublishGuard(uint64_t table_id);
+  ~AIColumnPublishGuard();
+  static bool permits(uint64_t table_id)
+  {
+    return table_id != common::OB_INVALID_ID && publishing_table_ == table_id;
+  }
+
+private:
+  const uint64_t previous_table_;
+  static thread_local uint64_t publishing_table_;
+  DISALLOW_COPY_AND_ASSIGN(AIColumnPublishGuard);
+};
+
 class ObUpdateResolver : public ObDelUpdResolver
 {
 public:
@@ -47,6 +64,9 @@ public:
 private:
   int resolve_table_list(const ParseNode &parse_tree);
   int generate_update_table_info(ObTableAssignment &table_assign);
+  int add_ai_column_invalidation(const share::schema::ObTableSchema &schema,
+                                 const TableItem &table,
+                                 ObTableAssignment &table_assign);
   int check_multi_update_table_conflict();
   int check_join_update_conflict();
   int is_join_table_update(const ObDMLStmt *stmt, bool &is_multi_table);

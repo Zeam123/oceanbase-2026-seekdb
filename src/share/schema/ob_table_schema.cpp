@@ -17,6 +17,7 @@
 #define USING_LOG_PREFIX SHARE_SCHEMA
 #include "common/datum/ob_datum.h"
 #include "share/schema/ob_col_desc.h"  // ObColDesc complete type(previously hidden behind the ddl_common include chain)
+#include "share/schema/ob_column_schema.h"
 #include "ob_table_schema.h"
 #include "lib/compress/ob_compressor_pool.h"
 #include "share/schema/ob_partition_array_utils.h"
@@ -1622,6 +1623,16 @@ int ObTableSchema::delete_column_update_prev_id(ObColumnSchemaV2 *local_column)
     }
   }
   return ret;
+}
+
+bool ObTableSchema::has_ai_columns() const
+{
+  for (auto iter = column_begin(); iter != column_end(); ++iter) {
+    if (*iter != nullptr && (*iter)->is_ai_column()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 int ObTableSchema::add_column_update_prev_id(ObColumnSchemaV2 *local_column)

@@ -2100,10 +2100,22 @@ int ObDmlCgService::generate_dml_base_ctdef(ObLogicalOperator &op,
   } else if (OB_FAIL(cg_.generate_rt_exprs(old_row, dml_base_ctdef.old_row_))) {
   } else if (OB_FAIL(cg_.generate_rt_exprs(new_row, dml_base_ctdef.new_row_))) {
   } else if (index_dml_info.is_primary_index_) {
-    bool is_heap_table = false;
-    if (OB_FAIL(check_is_heap_table(op, index_dml_info.ref_table_id_, is_heap_table))) {
+    ObSchemaGetterGuard *schema_guard = op.get_plan()->get_optimizer_context().get_schema_guard();
+    const ObTableSchema *table_schema = nullptr;
+    if (OB_ISNULL(schema_guard)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_FAIL(schema_guard->get_table_schema(index_dml_info.ref_table_id_, table_schema))) {
+    } else if (OB_ISNULL(table_schema)) {
+      ret = OB_ERR_UNEXPECTED;
     } else {
-      dml_base_ctdef.is_table_without_pk_ = is_heap_table;
+      dml_base_ctdef.is_table_without_pk_ = !table_schema->is_table_with_pk();
+      dml_base_ctdef.need_ai_column_tasks_ = table_schema->has_ai_columns() &&
+                                          (dml_base_ctdef.dml_type_ == DAS_OP_TABLE_INSERT ||
+                                           dml_base_ctdef.dml_type_ == DAS_OP_TABLE_DELETE ||
+                                           dml_base_ctdef.dml_type_ == DAS_OP_TABLE_UPDATE);
+      if (dml_base_ctdef.need_ai_column_tasks_) {
+        cg_.phy_plan_->set_has_nested_sql(true);
+      }
     }
   }
 

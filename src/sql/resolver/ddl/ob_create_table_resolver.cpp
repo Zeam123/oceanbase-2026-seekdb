@@ -950,6 +950,32 @@ int ObCreateTableResolver::resolve_table_elements(const ParseNode *node,
       } else if (OB_FAIL(resolve_primary_key_node_in_heap_table(primary_node_in_heap_table, stats, resolved_cols))) {
       }
     }
+    OZ (build_ai_columns(table_schema, stats));
+  }
+  return ret;
+}
+
+int ObCreateTableResolver::build_ai_columns(
+    ObTableSchema &table, const ObIArray<ObColumnResolveStat> &stats)
+{
+  int ret = OB_SUCCESS;
+  ObSEArray<uint64_t, 4> ai_result_ids;
+  for (int64_t i = 0; OB_SUCC(ret) && i < stats.count(); ++i) {
+    if (stats.at(i).ai_column_attribute_ != nullptr) {
+      OZ (ai_result_ids.push_back(stats.at(i).column_id_));
+    }
+  }
+  for (int64_t i = 0; OB_SUCC(ret) && i < stats.count(); ++i) {
+    const ObColumnResolveStat &stat = stats.at(i);
+    if (stat.ai_column_attribute_ != nullptr) {
+      ObColumnSchemaV2 *column = table.get_column_schema(stat.column_id_);
+      CK (column != nullptr);
+      OZ (prepare_ai_column_definition(table, stat, ai_result_ids, *column));
+      OZ (add_ai_column_companions(table, *column));
+    }
+  }
+  if (OB_SUCC(ret) && !ai_result_ids.empty()) {
+    cur_column_id_ = table.get_max_used_column_id();
   }
   return ret;
 }

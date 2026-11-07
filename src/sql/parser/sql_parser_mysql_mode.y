@@ -498,6 +498,7 @@ END_P SET_VAR DELIMITER
 %type <node> skip_index_type opt_skip_index_type_list
 %type <node> vec_index_params vec_index_param vec_index_param_value opt_with_vector_index_parameters
 %type <node> table_function_expr table_function_arguments table_function_column_aliases
+%type <node> ai_column_options ai_column_expression ai_column_arg_list ai_column_arg
 %type <node> file_copy_stmt file_copy_source file_copy_options file_copy_option_list file_copy_option
 %type <node> json_table_expr mock_jt_on_error_on_empty jt_column_list json_table_column_def
 %type <node> json_table_ordinality_column_def json_table_exists_column_def json_table_value_column_def json_table_nested_column_def
@@ -6129,6 +6130,35 @@ column_attribute_list column_attribute
   $$ = $1;
 }
 
+ai_column_options:
+/* empty */ { $$ = NULL; }
+| WITH '(' expr_list ')' { $$ = $3; }
+;
+
+ai_column_arg:
+expr
+{
+  $$ = $1;
+  $$->raw_text_ = copy_expr_string(result, @1.first_column, @1.last_column);
+  if ($$->raw_text_ == NULL) {
+    yyerror(&@1, result, "No more space for AI COLUMN argument");
+    YYABORT_NO_MEMORY;
+  }
+  $$->text_len_ = @1.last_column - @1.first_column + 1;
+}
+;
+
+ai_column_arg_list:
+ai_column_arg { malloc_list_node($$, result->malloc_pool_, T_EXPR_LIST, 2, 1, $1); }
+| ai_column_arg_list ',' ai_column_arg
+{ push_back_list(result->malloc_pool_, result, $$, $1, $3); }
+;
+
+ai_column_expression:
+function_name '(' ai_column_arg_list ')'
+{ malloc_non_terminal_node($$, result->malloc_pool_, T_FUN_SYS, 2, $1, $3); }
+;
+
 column_attribute:
 not NULLX
 {
@@ -6167,6 +6197,11 @@ not NULLX
 | COMMENT STRING_VALUE
 {
   malloc_non_terminal_node($$, result->malloc_pool_, T_COMMENT, 1, $2);
+}
+| AI COLUMN '(' ai_column_expression ')' ai_column_options
+{
+  dup_expr_string($4, result, @4.first_column, @4.last_column);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN, 2, $4, $6);
 }
 | ON UPDATE cur_timestamp_func
 {

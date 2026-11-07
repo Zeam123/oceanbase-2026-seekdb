@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/resolver/dml/ob_update_resolver.h"
+#include "share/schema/ob_column_schema.h"
 
 namespace oceanbase
 {
@@ -24,6 +25,19 @@ using namespace share;
 using namespace share::schema;
 namespace sql
 {
+thread_local uint64_t AIColumnPublishGuard::publishing_table_ = OB_INVALID_ID;
+
+AIColumnPublishGuard::AIColumnPublishGuard(uint64_t table_id)
+    : previous_table_(publishing_table_)
+{
+  publishing_table_ = table_id;
+}
+
+AIColumnPublishGuard::~AIColumnPublishGuard()
+{
+  publishing_table_ = previous_table_;
+}
+
 ObUpdateResolver::ObUpdateResolver(ObResolverParams &param)
   : ObDelUpdResolver(param)
 {
@@ -331,6 +345,102 @@ int ObUpdateResolver::resolve_table_list(const ParseNode &parse_tree)
   return ret;
 }
 
+int ObUpdateResolver::add_ai_column_invalidation(const ObTableSchema &schema,
+                                                  const TableItem &table,
+                                                  ObTableAssignment &table_assign)
+{
+  int ret = OB_SUCCESS;
+  ObSEArray<uint64_t, 8> assigned_ids;
+  bool may_change_key = false;
+  const ObDMLStmt *stmt = get_update_stmt();
+  const bool publishing = session_info_->is_inner() && !session_info_->is_user_session() &&
+                          AIColumnPublishGuard::permits(schema.get_table_id());
+  if (!schema.has_ai_columns()) {
+  } else if (OB_ISNULL(stmt)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    for (int64_t i = 0; OB_SUCC(ret) && i < table_assign.assignments_.count(); ++i) {
+      const ObAssignment &assignment = table_assign.assignments_.at(i);
+      const ObColumnRefRawExpr *expr = assignment.column_expr_;
+      const ColumnItem *item = nullptr;
+      const ObColumnSchemaV2 *column = nullptr;
+      if (OB_ISNULL(expr) || OB_ISNULL(item = stmt->get_column_item_by_id(
+                                            expr->get_table_id(), expr->get_column_id())) ||
+          OB_ISNULL(column = schema.get_column_schema(item->base_cid_))) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (publishing) {
+        bool allowed = column->is_ai_column();
+        for (auto iter = schema.column_begin(); !allowed && iter != schema.column_end(); ++iter) {
+          if ((*iter)->is_ai_column()) {
+            const auto &definition = (*iter)->get_ai_column_definition();
+            allowed = item->base_cid_ == definition.state_column_id_;
+          }
+        }
+        if (!allowed && !assignment.is_implicit_) {
+          ret = OB_ERR_UNEXPECTED;
+        }
+      } else if (column->is_ai_column() || (!assignment.is_implicit_ && column->is_hidden())) {
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "assignment to an AI COLUMN or its hidden columns");
+      } else if (OB_FAIL(assigned_ids.push_back(column->get_column_id()))) {
+      } else {
+        may_change_key = may_change_key || column->is_rowkey_column();
+      }
+    }
+    for (int64_t i = table_assign.assignments_.count(); OB_SUCC(ret) && publishing && i > 0; --i) {
+      const ObAssignment &assignment = table_assign.assignments_.at(i - 1);
+      if (assignment.is_implicit_ && assignment.column_expr_->get_result_type().has_result_flag(ON_UPDATE_NOW_FLAG)) {
+        OZ (table_assign.assignments_.remove(i - 1));
+      }
+    }
+    ObArenaAllocator allocator("AIColDeps");
+    ObSEArray<uint64_t, 8> dependencies;
+    for (auto iter = schema.column_begin(); OB_SUCC(ret) && !publishing && iter != schema.column_end(); ++iter) {
+      if (OB_ISNULL(*iter)) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (!(*iter)->is_ai_column()) {
+      } else if (OB_FAIL((*iter)->get_ai_column_definition().get_dependency_ids(allocator, dependencies))) {
+      } else {
+        bool may_change = may_change_key;
+        for (int64_t i = 0; !may_change && i < dependencies.count(); ++i) {
+          may_change = has_exist_in_array(assigned_ids, dependencies.at(i));
+        }
+        if (may_change && (!table.is_basic_table() || get_update_stmt()->is_ignore())) {
+          ret = OB_NOT_SUPPORTED;
+          LOG_USER_ERROR(OB_NOT_SUPPORTED, "updating AI COLUMN dependencies or keys through a view or with IGNORE");
+        } else if (may_change) {
+          const ObAIColumnDefinition &definition = (*iter)->get_ai_column_definition();
+          const uint64_t ids[] = {(*iter)->get_column_id(), definition.state_column_id_,
+                                  definition.request_column_id_};
+          for (const uint64_t id : ids) {
+            if (OB_FAIL(ret)) {
+              break;
+            }
+            const ObColumnSchemaV2 *column = schema.get_column_schema(id);
+            ObSEArray<ObColumnRefRawExpr *, 1> refs;
+            ObAssignment assignment;
+            if (OB_ISNULL(column)) {
+              ret = OB_ERR_UNEXPECTED;
+            } else if (OB_FAIL(add_column_to_stmt(table, *column, refs))) {
+            } else if (refs.count() != 1) {
+              ret = OB_ERR_UNEXPECTED;
+            } else {
+              // Reserve separate writable expressions for the storage and index projections.
+              // The executor changes their values only when the final dependency values differ.
+              assignment.column_expr_ = refs.at(0);
+              assignment.is_implicit_ = true;
+              OZ (ObRawExprUtils::build_wrapper_inner_expr(*params_.expr_factory_, *session_info_,
+                                                            refs.at(0), assignment.expr_));
+              OZ (table_assign.assignments_.push_back(assignment));
+            }
+          }
+        }
+      }
+    }
+  }
+  return ret;
+}
+
 int ObUpdateResolver::generate_update_table_info(ObTableAssignment &table_assign)
 {
   int ret = OB_SUCCESS;
@@ -352,6 +462,7 @@ int ObUpdateResolver::generate_update_table_info(ObTableAssignment &table_assign
                                                        table_schema))) {
   } else if (OB_ISNULL(table_schema)) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(add_ai_column_invalidation(*table_schema, *table_item, table_assign))) {
   } else if (OB_FAIL(schema_checker_->get_can_write_index_array(table_item->get_base_table_item().ref_id_,
                                                                 index_tid, gindex_cnt, true))) {
   } else if (OB_FAIL(params_.session_info_->get_binlog_row_image(binlog_row_image))) {

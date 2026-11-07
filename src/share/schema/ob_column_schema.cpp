@@ -16,6 +16,7 @@
 
 #define USING_LOG_PREFIX SHARE_SCHEMA
 #include "ob_column_schema.h"
+#include "common/json_type/ob_json_base.h"
 #include "share/schema/ob_schema_service.h"
 
 namespace oceanbase
@@ -26,6 +27,34 @@ namespace share
 {
 namespace schema
 {
+
+int ObAIColumnDefinition::get_dependency_ids(ObIAllocator &allocator, ObIArray<uint64_t> &ids) const
+{
+  int ret = OB_SUCCESS;
+  ObIJsonBase *array = nullptr;
+  ids.reuse();
+  if (OB_FAIL(ObJsonBaseFactory::get_json_base(&allocator, dependencies_, ObJsonInType::JSON_TREE,
+                                              ObJsonInType::JSON_TREE, array))) {
+  } else if (OB_ISNULL(array) || array->json_type() != ObJsonNodeType::J_ARRAY) {
+    ret = OB_INVALID_DATA;
+  } else {
+    for (uint64_t i = 0; OB_SUCC(ret) && i < array->element_count(); ++i) {
+      ObIJsonBase *item = nullptr;
+      if (OB_FAIL(array->get_array_element(i, item))) {
+      } else if (OB_ISNULL(item)) {
+        ret = OB_INVALID_DATA;
+      } else if (item->json_type() == ObJsonNodeType::J_UINT && item->get_uint() != 0 &&
+                 item->get_uint() != OB_INVALID_ID) {
+        OZ (ids.push_back(item->get_uint()));
+      } else if (item->json_type() == ObJsonNodeType::J_INT && item->get_int() > 0) {
+        OZ (ids.push_back(static_cast<uint64_t>(item->get_int())));
+      } else {
+        ret = OB_INVALID_DATA;
+      }
+    }
+  }
+  return ret;
+}
 
 
 ObColumnSchemaV2::ObColumnSchemaV2()
@@ -82,6 +111,8 @@ int ObColumnSchemaV2::assign(const ObColumnSchemaV2 &src_schema)
     } else if (OB_FAIL(deep_copy_obj(src_schema.cur_default_value_, cur_default_value_))) {
     } else if (OB_FAIL(deep_copy_str(src_schema.column_name_, column_name_))) {
     } else if (OB_FAIL(deep_copy_str(src_schema.comment_, comment_))) {
+    } else if (src_schema.is_ai_column() &&
+               OB_FAIL(set_ai_column_definition(src_schema.ai_column_))) {
     } else if (OB_FAIL(set_extended_type_info(src_schema.extended_type_info_))) {
     } else if (src_schema.column_ref_idxs_ != NULL) {
       if (OB_FAIL(alloc_column_ref_set())) {
@@ -96,6 +127,26 @@ int ObColumnSchemaV2::assign(const ObColumnSchemaV2 &src_schema)
 
     if (OB_FAIL(ret)) {
       error_ret_ = ret;
+    }
+  }
+  return ret;
+}
+
+OB_SERIALIZE_MEMBER(ObAIColumnDefinition, expression_, dependencies_, state_column_id_,
+                    request_column_id_, result_spec_column_id_, max_retries_);
+
+int ObColumnSchemaV2::set_ai_column_definition(const ObAIColumnDefinition &definition)
+{
+  int ret = OB_SUCCESS;
+  if (!definition.is_valid() && !definition.is_draft()) {
+    ret = OB_INVALID_ARGUMENT;
+  } else if (&definition != &ai_column_) {
+    ObAIColumnDefinition copied = definition;
+    if (OB_FAIL(deep_copy_str(definition.expression_, copied.expression_))) {
+    } else if (OB_FAIL(deep_copy_str(definition.dependencies_, copied.dependencies_))) {
+    } else {
+      ai_column_ = copied;
+      add_column_flag(AI_RESULT_COLUMN_FLAG);
     }
   }
   return ret;
@@ -128,6 +179,9 @@ int64_t ObColumnSchemaV2::get_convert_size() const
     convert_size += extended_type_info_.at(i).length() + 1;
   }
   convert_size += local_session_vars_.get_deep_copy_size();
+  if (is_ai_column()) {
+    convert_size += ai_column_.expression_.length() + ai_column_.dependencies_.length() + 2;
+  }
   return convert_size;
 }
 
@@ -188,6 +242,7 @@ void ObColumnSchemaV2::reset()
   skip_index_attr_.reset();
   lob_chunk_size_ = OB_DEFAULT_LOB_CHUNK_SIZE;
   local_session_vars_.reset();
+  ai_column_ = ObAIColumnDefinition();
   ObSchema::reset();
 }
 
@@ -236,6 +291,9 @@ OB_DEF_SERIALIZE(ObColumnSchemaV2)
                 skip_index_attr_,
                 lob_chunk_size_,
                 local_session_vars_);
+  }
+  if (OB_SUCC(ret) && is_ai_column()) {
+    OB_UNIS_ENCODE(ai_column_);
   }
 
   return ret;
@@ -297,6 +355,13 @@ OB_DEF_DESERIALIZE(ObColumnSchemaV2)
                 lob_chunk_size_,
                 local_session_vars_);
   }
+  if (OB_SUCC(ret) && pos < data_len) {
+    ObAIColumnDefinition definition;
+    OB_UNIS_DECODE(definition);
+    if (OB_SUCC(ret)) {
+      ret = set_ai_column_definition(definition);
+    }
+  }
   return ret;
 }
 
@@ -341,6 +406,9 @@ OB_DEF_SERIALIZE_SIZE(ObColumnSchemaV2)
               skip_index_attr_,
               lob_chunk_size_,
               local_session_vars_);
+  if (is_ai_column()) {
+    OB_UNIS_ADD_LEN(ai_column_);
+  }
   return len;
 }
 
@@ -575,6 +643,12 @@ int ObColumnSchemaV2::serialize_extended_type_info(char *buf, const int64_t buf_
 {
   int ret = OB_SUCCESS;
   if (OB_FAIL(serialize_string_array(buf, buf_len, pos, extended_type_info_))) {
+  } else if (has_ai_column_definition_flag()) {
+    if (!ai_column_.is_valid()) {
+      ret = OB_ERR_UNEXPECTED;
+    } else {
+      OB_UNIS_ENCODE(ai_column_);
+    }
   }
   return ret;
 }
@@ -585,6 +659,14 @@ int ObColumnSchemaV2::deserialize_extended_type_info(const char *buf,
 {
   int ret = OB_SUCCESS;
   if (OB_FAIL(deserialize_string_array(buf, data_len, pos, extended_type_info_, get_allocator()))) {
+  } else if (has_ai_column_definition_flag()) {
+    ObAIColumnDefinition definition;
+    OB_UNIS_DECODE(definition);
+    if (OB_SUCC(ret) && !definition.is_valid()) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_SUCC(ret)) {
+      ret = set_ai_column_definition(definition);
+    }
   }
   return ret;
 }

@@ -75,6 +75,7 @@ struct ObColumnResolveStat
     is_set_null_ = false;
     is_set_not_null_ = false;
     is_set_default_value_ = false;
+    ai_column_attribute_ = nullptr;
   }
   int64_t to_string(char *buf, const int64_t buf_len) const
   {
@@ -97,6 +98,7 @@ struct ObColumnResolveStat
   bool is_set_not_null_;
   bool is_set_default_value_;
   bool is_unique_key_;
+  const ParseNode *ai_column_attribute_;
 };
 
 struct ObDefaultValueRes
@@ -109,6 +111,15 @@ struct ObDefaultValueRes
 class ObDDLResolver : public ObStmtResolver
 {
 public:
+  static int prepare_ai_column_definition(
+      const share::schema::ObTableSchema &table,
+      const ObColumnResolveStat &stat,
+      const common::ObIArray<uint64_t> &ai_result_ids,
+      share::schema::ObColumnSchemaV2 &column);
+  static int add_ai_column_companions(
+      share::schema::ObTableSchema &table,
+      share::schema::ObColumnSchemaV2 &column);
+
   enum INDEX_TYPE {
     NOT_SPECIFIED = 0,
     LOCAL_INDEX = 1,

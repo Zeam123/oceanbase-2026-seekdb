@@ -7809,7 +7809,7 @@ int ObDDLService::add_new_column_to_table_schema(
     }
   }
   if (OB_SUCC(ret)) {
-    const ObColumnSchemaV2 *mem_col = NULL;
+    ObColumnSchemaV2 *mem_col = NULL;
     if (OB_FAIL(resolve_timestamp_column(&alter_column_schema,
                                          new_table_schema,
                                          alter_column_schema,
@@ -7824,7 +7824,24 @@ int ObDDLService::add_new_column_to_table_schema(
       ret = OB_ERR_UNEXPECTED;
     } else {
       alter_column_schema.set_prev_column_id(mem_col->get_prev_column_id());
-      if (update_inner_table) {
+      if (alter_column_schema.is_ai_column()) {
+        OZ (ObDDLResolver::add_ai_column_companions(new_table_schema, alter_column_schema));
+        if (OB_SUCC(ret)) {
+          const ObAIColumnDefinition &definition = alter_column_schema.get_ai_column_definition();
+          const uint64_t companion_ids[] = {definition.state_column_id_,
+                                            definition.request_column_id_,
+                                            definition.result_spec_column_id_};
+          OZ (mem_col->set_ai_column_definition(definition));
+          for (uint64_t id : companion_ids) {
+            if (OB_SUCC(ret) && update_inner_table) {
+              ObColumnSchemaV2 *companion = new_table_schema.get_column_schema(id);
+              CK (companion != nullptr);
+              OZ (ddl_operator->insert_single_column(*trans, new_table_schema, *companion));
+            }
+          }
+        }
+      }
+      if (OB_SUCC(ret) && update_inner_table) {
         if (OB_FAIL(ddl_operator->insert_single_column(*trans,
                 new_table_schema, alter_column_schema))) {
         }

@@ -114,11 +114,18 @@ int ObInsertResolver::resolve_insert_clause(const ParseNode &node)
   const ParseNode *values_node = NULL;
   TableItem* table_item = NULL;
   ObInsertStmt *insert_stmt = get_insert_stmt();
+  const ObTableSchema *table_schema = nullptr;
   if (OB_ISNULL(session_info_) || OB_ISNULL(insert_stmt) ||
       OB_ISNULL(insert_into = node.children_[INTO_NODE]) ||
       OB_ISNULL(values_node = node.children_[VALUE_NODE])) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_FAIL(resolve_insert_field(*insert_into, table_item))) {
+  } else if (table_item->is_basic_table() &&
+             OB_FAIL(schema_checker_->get_table_schema(table_item->ref_id_, table_schema))) {
+  } else if (table_schema != nullptr && table_schema->has_ai_columns() &&
+             (node.children_[DUPLICATE_NODE] != nullptr || insert_stmt->is_ignore())) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "AI COLUMN with INSERT IGNORE or ON DUPLICATE KEY UPDATE");
   } else if (OB_FAIL(resolve_values(*values_node,
                                     table_item, node.children_[DUPLICATE_NODE]))) {
   } else {

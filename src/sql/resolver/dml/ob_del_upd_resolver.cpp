@@ -2126,11 +2126,14 @@ int ObDelUpdResolver::resolve_insert_columns(const ParseNode *node,
   int ret = OB_SUCCESS;
   TableItem *table_item = NULL;
   ObDelUpdStmt *del_upd_stmt = get_del_upd_stmt();
+  const ObTableSchema *insert_schema = nullptr;
   if (OB_ISNULL(del_upd_stmt) || OB_ISNULL(session_info_) || OB_ISNULL(schema_checker_)) {
     ret = OB_ERR_UNEXPECTED;
     LOG_WARN("invalid insert stmt", K(del_upd_stmt), K_(session_info), K_(schema_checker));
   } else if (OB_ISNULL(table_item = del_upd_stmt->get_table_item(0))) {
     ret = OB_ERR_UNEXPECTED;
+  } else if (table_item->is_basic_table() &&
+             OB_FAIL(schema_checker_->get_table_schema(table_item->ref_id_, insert_schema))) {
   } else if (NULL != node && T_COLUMN_LIST == node->type_) {
     ParseNode *column_node = NULL;
     is_column_specify_ = true;
@@ -2143,6 +2146,7 @@ int ObDelUpdResolver::resolve_insert_columns(const ParseNode *node,
       ObQualifiedName column_ref;
       ObRawExpr *ref_expr = NULL;
       ObColumnRefRawExpr *column_expr = NULL;
+      const ObColumnSchemaV2 *target_column = nullptr;
       ObNameCaseMode case_mode = OB_NAME_CASE_INVALID;
       bool is_duplicate = false;
       if (OB_ISNULL(column_node)) {
@@ -2158,6 +2162,11 @@ int ObDelUpdResolver::resolve_insert_columns(const ParseNode *node,
         ret = OB_ERR_UNEXPECTED;
       } else if (FALSE_IT(column_expr = static_cast<ObColumnRefRawExpr*>(ref_expr))) {
         //do nothing
+      } else if (insert_schema != nullptr && insert_schema->has_ai_columns() &&
+                 (target_column = insert_schema->get_column_schema(column_expr->get_column_id())) != nullptr &&
+                 (target_column->is_ai_column() || target_column->is_hidden())) {
+        ret = OB_NOT_SUPPORTED;
+        LOG_USER_ERROR(OB_NOT_SUPPORTED, "assignment to an AI COLUMN or its hidden columns");
       } else if (OB_FAIL(check_insert_column_duplicate(column_expr->get_column_id(), is_duplicate))) {
       } else if (is_duplicate) {
         ret = OB_ERR_FIELD_SPECIFIED_TWICE;
@@ -2194,7 +2203,11 @@ int ObDelUpdResolver::resolve_insert_columns(const ParseNode *node,
       for (int64_t i = 0; OB_SUCC(ret) && i < N; i++) {
         uint64_t column_id = column_items.at(i).column_id_;
         bool is_duplicate = false;
-        if (OB_FAIL(check_insert_column_duplicate(column_id, is_duplicate))) {
+        const ObColumnSchemaV2 *target_column = insert_schema == nullptr ? nullptr :
+                                               insert_schema->get_column_schema(column_id);
+        if (target_column != nullptr && target_column->is_ai_column()) {
+          // The result is generated after commit and has a NULL default.
+        } else if (OB_FAIL(check_insert_column_duplicate(column_id, is_duplicate))) {
         } else if (is_duplicate) {
           ret = OB_ERR_FIELD_SPECIFIED_TWICE;
           ObCStringHelper helper;

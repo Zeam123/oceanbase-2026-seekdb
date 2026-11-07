@@ -64,6 +64,7 @@
 #include "observer/ob_internal_table_refresh_adapter.h"
 #include "observer/ob_ls_runtime_adapter.h"
 #include "observer/ob_server_duty_task.h"
+#include "observer/ai_service/ai_column_worker.h"
 #include "observer/ob_srv_network_frame.h"
 #include "observer/ob_service.h"
 #include "observer/ob_server_reload_config.h"
@@ -483,6 +484,8 @@ private:
   common::ObTimer server_gtimer_;
   common::ObTimer sql_mem_timer_;
   common::ObTimer ctas_clean_up_timer_;
+  common::ObTimer ai_column_timer_;
+  AIColumnWorker ai_column_worker_;
   ObServerDutyTask duty_task_;
   ObSqlMemoryTimerTask sql_mem_task_;
   ObCTASCleanUpTask ctas_clean_up_task_;     // repeat & no retry
