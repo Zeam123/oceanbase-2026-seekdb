@@ -10988,5 +10988,18 @@
     "info_cn": "启用通过无模式表函数查询本地文件",
     "background_cn": "",
     "ref_url": ""
+  },
+  "ai_column_strict_read": {
+    "id": 10755,
+    "name": "ai_column_strict_read",
+    "default_value": "0",
+    "base_value": "0",
+    "data_type": "bool",
+    "info": "Reject statements that reference an AI column while any row in that column is not ready.",
+    "flags": "SESSION | INFLUENCE_PLAN",
+    "publish_version": "1.4.0.0",
+    "info_cn": "引用尚未全部就绪的 AI 列时拒绝执行语句",
+    "background_cn": "",
+    "ref_url": ""
   }
 }

@@ -95,6 +95,7 @@ public:
   int resolve_modify_all_trigger(const ParseNode &node);
 
 private:
+  int resolve_ai_column_retry(const ParseNode &node, const bool is_multi_action);
   int check_dup_foreign_keys_exist(
       share::schema::ObSchemaGetterGuard *schema_guard,
       const obcall::ObCreateForeignKeyArg &foreign_key_arg);

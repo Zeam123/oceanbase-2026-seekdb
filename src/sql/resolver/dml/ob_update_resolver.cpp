@@ -26,6 +26,8 @@ using namespace share::schema;
 namespace sql
 {
 thread_local uint64_t AIColumnPublishGuard::publishing_table_ = OB_INVALID_ID;
+thread_local uint64_t AIColumnRetryGuard::retrying_table_ = OB_INVALID_ID;
+thread_local uint64_t AIColumnRetryGuard::retrying_column_ = OB_INVALID_ID;
 
 AIColumnPublishGuard::AIColumnPublishGuard(uint64_t table_id)
     : previous_table_(publishing_table_)
@@ -36,6 +38,19 @@ AIColumnPublishGuard::AIColumnPublishGuard(uint64_t table_id)
 AIColumnPublishGuard::~AIColumnPublishGuard()
 {
   publishing_table_ = previous_table_;
+}
+
+AIColumnRetryGuard::AIColumnRetryGuard(uint64_t table_id, uint64_t column_id)
+  : previous_table_(retrying_table_), previous_column_(retrying_column_)
+{
+  retrying_table_ = table_id;
+  retrying_column_ = column_id;
+}
+
+AIColumnRetryGuard::~AIColumnRetryGuard()
+{
+  retrying_table_ = previous_table_;
+  retrying_column_ = previous_column_;
 }
 
 ObUpdateResolver::ObUpdateResolver(ObResolverParams &param)
@@ -355,6 +370,7 @@ int ObUpdateResolver::add_ai_column_invalidation(const ObTableSchema &schema,
   const ObDMLStmt *stmt = get_update_stmt();
   const bool publishing = session_info_->is_inner() && !session_info_->is_user_session() &&
                           AIColumnPublishGuard::permits(schema.get_table_id());
+  const bool retrying = AIColumnRetryGuard::active_for(schema.get_table_id());
   if (!schema.has_ai_columns()) {
   } else if (OB_ISNULL(stmt)) {
     ret = OB_ERR_UNEXPECTED;
@@ -368,6 +384,16 @@ int ObUpdateResolver::add_ai_column_invalidation(const ObTableSchema &schema,
                                             expr->get_table_id(), expr->get_column_id())) ||
           OB_ISNULL(column = schema.get_column_schema(item->base_cid_))) {
         ret = OB_ERR_UNEXPECTED;
+      } else if (retrying) {
+        const ObColumnSchemaV2 *target = schema.get_column_schema(AIColumnRetryGuard::target_column());
+        bool allowed = target != nullptr && target->is_ai_column()
+                       && (column->get_column_id() == target->get_column_id()
+                           || column->get_column_id() == target->get_ai_column_definition().state_column_id_
+                           || column->get_column_id() == target->get_ai_column_definition().request_column_id_);
+        if (!allowed || assignment.is_implicit_) {
+          ret = OB_NOT_SUPPORTED;
+          LOG_USER_ERROR(OB_NOT_SUPPORTED, "invalid internal AI COLUMN retry assignment");
+        }
       } else if (publishing) {
         bool allowed = column->is_ai_column();
         for (auto iter = schema.column_begin(); !allowed && iter != schema.column_end(); ++iter) {
@@ -395,7 +421,7 @@ int ObUpdateResolver::add_ai_column_invalidation(const ObTableSchema &schema,
     }
     ObArenaAllocator allocator("AIColDeps");
     ObSEArray<uint64_t, 8> dependencies;
-    for (auto iter = schema.column_begin(); OB_SUCC(ret) && !publishing && iter != schema.column_end(); ++iter) {
+    for (auto iter = schema.column_begin(); OB_SUCC(ret) && !publishing && !retrying && iter != schema.column_end(); ++iter) {
       if (OB_ISNULL(*iter)) {
         ret = OB_ERR_UNEXPECTED;
       } else if (!(*iter)->is_ai_column()) {

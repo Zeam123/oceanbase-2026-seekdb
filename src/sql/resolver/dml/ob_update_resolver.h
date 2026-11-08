@@ -42,6 +42,32 @@ private:
   DISALLOW_COPY_AND_ASSIGN(AIColumnPublishGuard);
 };
 
+// Allows the RETRY AI COLUMN executor to invalidate exactly one AI column and
+// its private state/request companions through an internal SQL connection.
+class AIColumnRetryGuard
+{
+public:
+  AIColumnRetryGuard(uint64_t table_id, uint64_t column_id);
+  ~AIColumnRetryGuard();
+  static bool permits(uint64_t table_id, uint64_t column_id)
+  {
+    return table_id != common::OB_INVALID_ID && table_id == retrying_table_
+        && column_id != common::OB_INVALID_ID && column_id == retrying_column_;
+  }
+  static bool active_for(uint64_t table_id)
+  {
+    return table_id != common::OB_INVALID_ID && table_id == retrying_table_;
+  }
+  static uint64_t target_column() { return retrying_column_; }
+
+private:
+  const uint64_t previous_table_;
+  const uint64_t previous_column_;
+  static thread_local uint64_t retrying_table_;
+  static thread_local uint64_t retrying_column_;
+  DISALLOW_COPY_AND_ASSIGN(AIColumnRetryGuard);
+};
+
 class ObUpdateResolver : public ObDelUpdResolver
 {
 public:

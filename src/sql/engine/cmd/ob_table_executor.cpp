@@ -38,6 +38,7 @@
 #include "sql/resolver/ddl/ob_purge_stmt.h"
 #include "sql/resolver/ddl/ob_optimize_stmt.h"
 #include "sql/resolver/dml/ob_delete_resolver.h"
+#include "sql/resolver/dml/ob_update_resolver.h"
 #include "sql/engine/cmd/ob_partition_executor_utils.h"
 
 #include "sql/printer/ob_select_stmt_printer.h"
@@ -754,6 +755,33 @@ int ObAlterTableExecutor::alter_table_exchange_partition_rpc(obcall::ObExchangeP
 int ObAlterTableExecutor::execute(ObExecContext &ctx, ObAlterTableStmt &stmt)
 {
   int ret = OB_SUCCESS;
+  if (stmt.is_ai_column_retry()) {
+    ObSQLSessionInfo *session = ctx.get_my_session();
+    sqlclient::ObISQLConnection *conn = nullptr;
+    sqlclient::ObISQLConnectionGuard conn_guard;
+    bool own_transaction = false;
+    int64_t affected_rows = 0;
+    if (OB_ISNULL(session)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_FAIL(query::ObInnerSQLConnectionAccess::
+                           create_spi_connection_with_external_session(session, conn_guard))) {
+    } else if (OB_ISNULL(conn = conn_guard.get_ptr())) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (!session->is_in_transaction() && OB_FAIL(conn->start_transaction())) {
+    } else {
+      own_transaction = !session->is_in_transaction();
+      AIColumnRetryGuard guard(stmt.get_ai_retry_table_id(), stmt.get_ai_retry_column_id());
+      ret = conn->execute_write(stmt.get_ai_retry_sql(), affected_rows);
+    }
+    if (own_transaction && conn != nullptr) {
+      const int end_ret = OB_SUCC(ret) ? conn->commit() : conn->rollback();
+      if (OB_SUCC(ret)) { ret = end_ret; }
+    }
+    if (OB_SUCC(ret) && ctx.get_physical_plan_ctx() != nullptr) {
+      ctx.get_physical_plan_ctx()->set_affected_rows(affected_rows);
+    }
+    return ret;
+  }
   ObSqlExecutorCtx *task_exec_ctx = NULL;
   obcall::ObAlterTableArg &alter_table_arg = stmt.get_alter_table_arg();
   obcall::ObExchangePartitionArg &exchange_partition_arg = stmt.get_exchange_partition_arg();

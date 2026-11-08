@@ -104,6 +104,17 @@ public:
     alter_table_arg_.lock_session_create_ts_ = create_ts;
   }
   void set_lock_priority();
+  bool is_ai_column_retry() const { return is_ai_column_retry_; }
+  void set_ai_column_retry(uint64_t table_id, uint64_t column_id)
+  {
+    is_ai_column_retry_ = true;
+    ai_retry_table_id_ = table_id;
+    ai_retry_column_id_ = column_id;
+  }
+  uint64_t get_ai_retry_table_id() const { return ai_retry_table_id_; }
+  uint64_t get_ai_retry_column_id() const { return ai_retry_column_id_; }
+  common::ObSqlString &get_ai_retry_sql() { return ai_retry_sql_; }
+  const common::ObSqlString &get_ai_retry_sql() const { return ai_retry_sql_; }
 private:
   obcall::ObAlterTableArg alter_table_arg_;
   bool is_comment_table_;
@@ -114,6 +125,10 @@ private:
   obcall::ObAlterTriggerArg tg_arg_;
   uint64_t alter_table_action_count_;
   obcall::ObExchangePartitionArg exchange_partition_arg_;
+  bool is_ai_column_retry_;
+  uint64_t ai_retry_table_id_;
+  uint64_t ai_retry_column_id_;
+  common::ObSqlString ai_retry_sql_;
 };
 
 inline int ObAlterTableStmt::set_tz_info_wrap(const common::ObTimeZoneInfoWrap &tz_info_wrap)

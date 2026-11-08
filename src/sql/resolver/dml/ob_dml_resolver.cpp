@@ -44,6 +44,7 @@
 #include "sql/resolver/dcl/ob_dcl_resolver.h"
 #include "sql/resolver/ddl/ob_ddl_resolver.h"
 #include "sql/hybrid_search/ob_hybrid_search_executor.h"
+#include "common/mysqlclient/ob_mysql_proxy.h"
 
 namespace oceanbase
 {
@@ -2253,6 +2254,69 @@ int ObDMLResolver::resolve_column_ref_expr(const ObQualifiedName &q_name, ObRawE
   int ret = OB_SUCCESS;
   if (OB_FAIL(resolve_table_column_expr(q_name, real_ref_expr))) {
     LOG_WARN_IGNORE_COL_NOTFOUND(ret, "resolve table column failed", K(q_name), K(ret));
+  } else if (OB_NOT_NULL(real_ref_expr) && OB_FAIL(check_ai_column_strict_read(*real_ref_expr))) {
+    LOG_WARN("AI column strict-read check failed", K(ret), K(q_name));
+  }
+  return ret;
+}
+
+int ObDMLResolver::check_ai_column_strict_read(const ObRawExpr &expr)
+{
+  int ret = OB_SUCCESS;
+  int64_t strict_read = 0;
+  const ObColumnRefRawExpr *column = nullptr;
+  const TableItem *table_item = nullptr;
+  const ObTableSchema *table_schema = nullptr;
+  const ObColumnSchemaV2 *column_schema = nullptr;
+  const ObColumnSchemaV2 *state_schema = nullptr;
+  const ObDatabaseSchema *database_schema = nullptr;
+  if (!expr.is_column_ref_expr()) {
+  } else if (OB_ISNULL(session_info_) || OB_ISNULL(schema_checker_) || OB_ISNULL(get_stmt())) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (OB_FAIL(session_info_->get_sys_variable(SYS_VAR_AI_COLUMN_STRICT_READ, strict_read))) {
+    LOG_WARN("failed to read AI column strict-read setting", K(ret));
+  } else if (strict_read == 0) {
+  } else if (OB_FALSE_IT(column = static_cast<const ObColumnRefRawExpr *>(&expr))) {
+  } else if (OB_ISNULL(table_item = get_stmt()->get_table_item_by_id(column->get_table_id()))) {
+  } else if (!table_item->is_basic_table()) {
+  } else if (OB_FAIL(schema_checker_->get_table_schema(table_item->ref_id_, table_schema))) {
+    LOG_WARN("failed to get table schema for AI strict read", K(ret), K(table_item->ref_id_));
+  } else if (OB_ISNULL(table_schema)
+             || OB_ISNULL(column_schema = table_schema->get_column_schema(column->get_column_id()))
+             || !column_schema->is_ai_column()) {
+  } else if (OB_ISNULL(state_schema = table_schema->get_column_schema(
+                           column_schema->get_ai_column_definition().state_column_id_))) {
+    ret = OB_SCHEMA_EAGAIN;
+  } else if (OB_FAIL(schema_checker_->get_database_schema(table_schema->get_database_id(), database_schema))) {
+    LOG_WARN("failed to get database schema for AI strict read", K(ret));
+  } else if (OB_ISNULL(database_schema) || OB_ISNULL(GCTX.sql_proxy_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else {
+    ObSqlString sql;
+    OZ (sql.append("SELECT 1 FROM "));
+    OZ (ObResolverUtils::append_qualified_identifier(
+          sql, database_schema->get_database_name_str(), table_schema->get_table_name_str()));
+    OZ (sql.append(" WHERE "));
+    OZ (ObResolverUtils::append_escaped_identifier(sql, state_schema->get_column_name_str()));
+    OZ (sql.append(" IS NULL OR "));
+    OZ (ObResolverUtils::append_escaped_identifier(sql, state_schema->get_column_name_str()));
+    OZ (sql.append(" <> 1 LIMIT 1"));
+    if (OB_SUCC(ret)) {
+      SMART_VAR(ObMySQLProxy::MySQLResult, result) {
+        ObMySQLResult *rows = nullptr;
+        if (OB_FAIL(GCTX.sql_proxy_->read(result, sql.ptr()))) {
+          LOG_WARN("failed to inspect AI column readiness", K(ret), K(sql));
+        } else if (OB_ISNULL(rows = result.get_result())) {
+          ret = OB_ERR_UNEXPECTED;
+        } else if (OB_SUCCESS == (ret = rows->next())) {
+          ret = OB_AI_COLUMN_NOT_READY;
+          LOG_USER_ERROR(OB_AI_COLUMN_NOT_READY,
+                         table_schema->get_table_id(), column_schema->get_column_id());
+        } else if (ret == OB_ITER_END) {
+          ret = OB_SUCCESS;
+        }
+      }
+    }
   }
   return ret;
 }

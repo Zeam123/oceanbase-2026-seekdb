@@ -398,12 +398,21 @@ int ObAlterTableResolver::resolve_action_list(const ParseNode &node)
       if (OB_ISNULL(action_node)) {
         ret = OB_ERR_UNEXPECTED;
         SQL_RESV_LOG(WARN, "invalid parse tree!", K(ret));
-      } else if (table_schema_->has_ai_columns() && action_node->type_ != T_COLUMN_ADD) {
+      } else if (table_schema_->has_ai_columns()
+                 && action_node->type_ != T_COLUMN_ADD
+                 && action_node->type_ != T_ALTER_INDEX_OPTION
+                 && action_node->type_ != T_ALTER_INDEX_OPTION_EXTENDED
+                 && action_node->type_ != T_AI_COLUMN_RETRY) {
         ret = OB_NOT_SUPPORTED;
         LOG_USER_ERROR(OB_NOT_SUPPORTED, "altering AI COLUMN table definitions");
       } else if (FALSE_IT(alter_table_stmt->inc_alter_table_action_count())) {
       } else {
         switch (action_node->type_) {
+        case T_AI_COLUMN_RETRY: {
+            if (OB_FAIL(resolve_ai_column_retry(*action_node, node.num_child_ > 1))) {
+            }
+            break;
+          }
         //deal with alter table option
         case T_ALTER_TABLE_OPTION: {
             alter_table_stmt->set_alter_table_option();
@@ -748,6 +757,112 @@ int ObAlterTableResolver::resolve_action_list(const ParseNode &node)
       }
     }
     } // end for heap_vars_2.
+  }
+  return ret;
+}
+
+int ObAlterTableResolver::resolve_ai_column_retry(const ParseNode &node, const bool is_multi_action)
+{
+  int ret = OB_SUCCESS;
+  ObAlterTableStmt *stmt = get_alter_table_stmt();
+  const ObColumnSchemaV2 *column = nullptr;
+  const ObColumnSchemaV2 *state_column = nullptr;
+  const ObColumnSchemaV2 *request_column = nullptr;
+  const ObDatabaseSchema *database = nullptr;
+  if (is_multi_action || node.num_child_ < 2 || node.children_ == nullptr
+      || node.children_[0] == nullptr || node.children_[1] == nullptr
+      || node.str_value_ == nullptr || node.str_len_ <= 0) {
+    ret = OB_NOT_SUPPORTED;
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "RETRY AI COLUMN must be the only ALTER TABLE action");
+  } else {
+    const ObString keyword(node.children_[0]->str_len_, node.children_[0]->str_value_);
+    const ObString column_name(node.children_[1]->str_len_, node.children_[1]->str_value_);
+    if (keyword.case_compare("retry") != 0) {
+      ret = OB_ERR_PARSE_SQL;
+    } else if (OB_ISNULL(stmt) || OB_ISNULL(table_schema_)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else if (OB_ISNULL(column = table_schema_->get_column_schema(column_name))
+               || !column->is_ai_column()) {
+      ret = OB_NOT_SUPPORTED;
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "RETRY target must be an AI COLUMN");
+    } else if (OB_ISNULL(state_column = table_schema_->get_column_schema(
+                             column->get_ai_column_definition().state_column_id_))
+               || OB_ISNULL(request_column = table_schema_->get_column_schema(
+                             column->get_ai_column_definition().request_column_id_))) {
+      ret = OB_SCHEMA_EAGAIN;
+    } else if (OB_FAIL(schema_checker_->get_database_schema(
+                           table_schema_->get_database_id(), database))) {
+    } else if (OB_ISNULL(database)) {
+      ret = OB_ERR_UNEXPECTED;
+    } else {
+      ObString raw(node.str_len_, node.str_value_);
+      int64_t where_pos = -1;
+      for (int64_t i = 0; where_pos < 0 && i + 7 <= raw.length(); ++i) {
+        if (raw.ptr()[i] == ' '
+            && ObString(5, raw.ptr() + i + 1).case_compare("where") == 0
+            && i + 6 < raw.length() && raw.ptr()[i + 6] == ' ') {
+          where_pos = i + 7;
+        }
+      }
+      ObSqlString predicate;
+      if (where_pos >= 0) {
+        const char *ptr = raw.ptr() + where_pos;
+        const int64_t len = raw.length() - where_pos;
+        char quote = 0;
+        for (int64_t i = 0; OB_SUCC(ret) && i < len;) {
+          const char ch = ptr[i];
+          if (quote != 0) {
+            OZ (predicate.append(&ptr[i], 1));
+            if (ch == quote && (i == 0 || ptr[i - 1] != '\\')) { quote = 0; }
+            ++i;
+          } else if (ch == '\'' || ch == '"' || ch == '`') {
+            quote = ch;
+            OZ (predicate.append(&ptr[i], 1));
+            ++i;
+          } else {
+            const bool left_boundary = i == 0
+                || !((ptr[i - 1] >= 'a' && ptr[i - 1] <= 'z')
+                     || (ptr[i - 1] >= 'A' && ptr[i - 1] <= 'Z')
+                     || (ptr[i - 1] >= '0' && ptr[i - 1] <= '9')
+                     || ptr[i - 1] == '_' || ptr[i - 1] == '$');
+            const bool right_boundary = i + 6 >= len
+                || !((ptr[i + 6] >= 'a' && ptr[i + 6] <= 'z')
+                     || (ptr[i + 6] >= 'A' && ptr[i + 6] <= 'Z')
+                     || (ptr[i + 6] >= '0' && ptr[i + 6] <= '9')
+                     || ptr[i + 6] == '_' || ptr[i + 6] == '$');
+            if (left_boundary && right_boundary && i + 6 <= len
+                && ObString(6, ptr + i).case_compare("status") == 0) {
+              OZ (predicate.append("(CASE "));
+              OZ (ObResolverUtils::append_escaped_identifier(
+                    predicate, state_column->get_column_name_str()));
+              OZ (predicate.append(" WHEN 0 THEN 'PENDING' WHEN 1 THEN 'READY' ELSE 'FAILED' END)"));
+              i += 6;
+            } else {
+              OZ (predicate.append(&ptr[i], 1));
+              ++i;
+            }
+          }
+        }
+      }
+      ObSqlString &sql = stmt->get_ai_retry_sql();
+      OZ (sql.append("UPDATE "));
+      OZ (ObResolverUtils::append_qualified_identifier(
+            sql, database->get_database_name_str(), table_schema_->get_table_name_str()));
+      OZ (sql.append(" SET "));
+      OZ (ObResolverUtils::append_escaped_identifier(sql, column->get_column_name_str()));
+      OZ (sql.append("=NULL,"));
+      OZ (ObResolverUtils::append_escaped_identifier(sql, state_column->get_column_name_str()));
+      OZ (sql.append("=0,"));
+      OZ (ObResolverUtils::append_escaped_identifier(sql, request_column->get_column_name_str()));
+      OZ (sql.append("=UUID()"));
+      if (where_pos >= 0) {
+        OZ (sql.append(" WHERE "));
+        OZ (sql.append(predicate.string()));
+      }
+      if (OB_SUCC(ret)) {
+        stmt->set_ai_column_retry(table_schema_->get_table_id(), column->get_column_id());
+      }
+    }
   }
   return ret;
 }

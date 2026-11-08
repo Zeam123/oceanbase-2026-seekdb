@@ -14807,6 +14807,16 @@ opt_set table_option_list_space_seperated
 {
   malloc_non_terminal_node($$, result->malloc_pool_, T_ALTER_FOREIGN_KEY_OPTION, 1, $1);
 }
+| relation_name AI COLUMN relation_name
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 2, $1, $4);
+  dup_string($$, result, @1.first_column, @4.last_column);
+}
+| relation_name AI COLUMN relation_name WHERE opt_hint_value expr
+{
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 3, $1, $4, $7);
+  dup_string($$, result, @1.first_column, @7.last_column);
+}
 |
 DROP CONSTRAINT constraint_name
 {
