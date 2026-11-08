@@ -2211,6 +2211,9 @@ int invalidate_ai_column_results(ObTableModifyOp &op, const ObDMLBaseCtDef &ctde
         if (request_slot >= 0 && ctdef.old_row_.at(request_slot) != ctdef.new_row_.at(request_slot)) {
           bool changed = key_changed;
           if (!changed) {
+            OZ (ai_update_value_changed(eval_ctx, ctdef, request_slot, changed));
+          }
+          if (!changed) {
             OZ (definition.get_dependency_ids(allocator, deps));
           }
           for (int64_t i = 0; OB_SUCC(ret) && !changed && i < deps.count(); ++i) {

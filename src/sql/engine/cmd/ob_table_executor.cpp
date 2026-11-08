@@ -767,11 +767,16 @@ int ObAlterTableExecutor::execute(ObExecContext &ctx, ObAlterTableStmt &stmt)
                            create_spi_connection_with_external_session(session, conn_guard))) {
     } else if (OB_ISNULL(conn = conn_guard.get_ptr())) {
       ret = OB_ERR_UNEXPECTED;
-    } else if (!session->is_in_transaction() && OB_FAIL(conn->start_transaction())) {
     } else {
-      own_transaction = !session->is_in_transaction();
+      const bool need_transaction = !session->is_in_transaction();
+      if (need_transaction && OB_FAIL(conn->start_transaction())) {
+      } else {
+        own_transaction = need_transaction;
+      }
+    }
+    if (OB_SUCC(ret)) {
       AIColumnRetryGuard guard(stmt.get_ai_retry_table_id(), stmt.get_ai_retry_column_id());
-      ret = conn->execute_write(stmt.get_ai_retry_sql(), affected_rows);
+      ret = conn->execute_write(stmt.get_ai_retry_sql().string(), affected_rows);
     }
     if (own_transaction && conn != nullptr) {
       const int end_ret = OB_SUCC(ret) ? conn->commit() : conn->rollback();

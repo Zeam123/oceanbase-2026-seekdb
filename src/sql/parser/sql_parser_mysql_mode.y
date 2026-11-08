@@ -243,7 +243,7 @@ END_P SET_VAR DELIMITER
         NATURAL NOT NO_WRITE_TO_BINLOG /*NULL*/ NUMERIC
         ON OPTIMIZE /*OPTIMIZER_COSTS*/ OPTION OPTIONALLY OR ORDER OUT OUTER OUTFILE
         PARTITION PRECISION PRIMARY PROCEDURE PURGE
-        RANGE READ READS READ_WRITE REAL REFERENCES REGEXP RELEASE RENAME REPEAT REPLACE REQUIRE
+        RANGE READ READS READ_WRITE REAL REFERENCES REGEXP RELEASE RENAME REPEAT REPLACE REQUIRE RETRY
         RESIGNAL RESTRICT RETURN REVOKE RIGHT RLIKE
         SCHEMA SCHEMAS SECOND_MICROSECOND SELECT SENSITIVE SEPARATOR SET SHOW SIGNAL SMALLINT SPATIAL
         SPECIFIC SQL SQLEXCEPTION SQLSTATE SQLWARNING SQL_BIG_RESULT SQL_CALC_FOUND_ROWS
@@ -14807,14 +14807,15 @@ opt_set table_option_list_space_seperated
 {
   malloc_non_terminal_node($$, result->malloc_pool_, T_ALTER_FOREIGN_KEY_OPTION, 1, $1);
 }
-| relation_name AI COLUMN relation_name
+| RETRY AI COLUMN relation_name
 {
-  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 2, $1, $4);
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 1, $4);
   dup_string($$, result, @1.first_column, @4.last_column);
 }
-| relation_name AI COLUMN relation_name WHERE opt_hint_value expr
+| RETRY AI COLUMN relation_name WHERE opt_hint_value expr
 {
-  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 3, $1, $4, $7);
+  (void)$6;
+  malloc_non_terminal_node($$, result->malloc_pool_, T_AI_COLUMN_RETRY, 2, $4, $7);
   dup_string($$, result, @1.first_column, @7.last_column);
 }
 |

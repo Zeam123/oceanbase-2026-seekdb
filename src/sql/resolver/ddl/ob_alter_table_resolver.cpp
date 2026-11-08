@@ -769,17 +769,14 @@ int ObAlterTableResolver::resolve_ai_column_retry(const ParseNode &node, const b
   const ObColumnSchemaV2 *state_column = nullptr;
   const ObColumnSchemaV2 *request_column = nullptr;
   const ObDatabaseSchema *database = nullptr;
-  if (is_multi_action || node.num_child_ < 2 || node.children_ == nullptr
-      || node.children_[0] == nullptr || node.children_[1] == nullptr
+  if (is_multi_action || node.num_child_ < 1 || node.children_ == nullptr
+      || node.children_[0] == nullptr
       || node.str_value_ == nullptr || node.str_len_ <= 0) {
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "RETRY AI COLUMN must be the only ALTER TABLE action");
   } else {
-    const ObString keyword(node.children_[0]->str_len_, node.children_[0]->str_value_);
-    const ObString column_name(node.children_[1]->str_len_, node.children_[1]->str_value_);
-    if (keyword.case_compare("retry") != 0) {
-      ret = OB_ERR_PARSE_SQL;
-    } else if (OB_ISNULL(stmt) || OB_ISNULL(table_schema_)) {
+    const ObString column_name(node.children_[0]->str_len_, node.children_[0]->str_value_);
+    if (OB_ISNULL(stmt) || OB_ISNULL(table_schema_)) {
       ret = OB_ERR_UNEXPECTED;
     } else if (OB_ISNULL(column = table_schema_->get_column_schema(column_name))
                || !column->is_ai_column()) {

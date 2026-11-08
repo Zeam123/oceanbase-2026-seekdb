@@ -45,6 +45,8 @@
 #include "sql/resolver/ddl/ob_ddl_resolver.h"
 #include "sql/hybrid_search/ob_hybrid_search_executor.h"
 #include "common/mysqlclient/ob_mysql_proxy.h"
+#include "query/api/query/session/ob_inner_sql_connection_access.h"
+#include "sql/session/ob_inner_sql_connection.h"
 
 namespace oceanbase
 {
@@ -1814,10 +1816,11 @@ int ObDMLResolver::resolve_basic_column_ref(const ObQualifiedName &q_name, ObRaw
       LOG_WARN("table item is invalid", KPC(table_item));
     } else {
       if (table_item->is_basic_table()) {
-        const bool worker_update = current_scope_ == T_UPDATE_SCOPE && session_info_->is_inner() &&
-                                   !session_info_->is_user_session() &&
-                                   AIColumnPublishGuard::permits(table_item->ref_id_);
-        if (OB_FAIL(resolve_basic_column_item(*table_item, q_name.col_name_, worker_update, column_item))) {
+        const bool internal_ai_update = current_scope_ == T_UPDATE_SCOPE &&
+            ((session_info_->is_inner() && !session_info_->is_user_session() &&
+              AIColumnPublishGuard::permits(table_item->ref_id_)) ||
+             AIColumnRetryGuard::active_for(table_item->ref_id_));
+        if (OB_FAIL(resolve_basic_column_item(*table_item, q_name.col_name_, internal_ai_update, column_item))) {
         }
       } else if (table_item->is_generated_table() || table_item->is_temp_table()) {
         if (OB_FAIL(resolve_generated_table_column_item(*table_item, q_name.col_name_, column_item))) {
@@ -2284,14 +2287,20 @@ int ObDMLResolver::check_ai_column_strict_read(const ObRawExpr &expr)
   } else if (OB_ISNULL(table_schema)
              || OB_ISNULL(column_schema = table_schema->get_column_schema(column->get_column_id()))
              || !column_schema->is_ai_column()) {
+  } else if (OB_ISNULL(params_.query_ctx_)) {
+    ret = OB_ERR_UNEXPECTED;
   } else if (OB_ISNULL(state_schema = table_schema->get_column_schema(
                            column_schema->get_ai_column_definition().state_column_id_))) {
     ret = OB_SCHEMA_EAGAIN;
   } else if (OB_FAIL(schema_checker_->get_database_schema(table_schema->get_database_id(), database_schema))) {
     LOG_WARN("failed to get database schema for AI strict read", K(ret));
-  } else if (OB_ISNULL(database_schema) || OB_ISNULL(GCTX.sql_proxy_)) {
+  } else if (OB_ISNULL(database_schema)) {
     ret = OB_ERR_UNEXPECTED;
   } else {
+    // Readiness is data state, not schema state. A cached plan that was built
+    // while all rows were READY must not bypass this check after a row becomes
+    // PENDING or FAILED.
+    params_.query_ctx_->disable_plan_cache_ = true;
     ObSqlString sql;
     OZ (sql.append("SELECT 1 FROM "));
     OZ (ObResolverUtils::append_qualified_identifier(
@@ -2303,8 +2312,28 @@ int ObDMLResolver::check_ai_column_strict_read(const ObRawExpr &expr)
     OZ (sql.append(" <> 1 LIMIT 1"));
     if (OB_SUCC(ret)) {
       SMART_VAR(ObMySQLProxy::MySQLResult, result) {
-        ObMySQLResult *rows = nullptr;
-        if (OB_FAIL(GCTX.sql_proxy_->read(result, sql.ptr()))) {
+        sqlclient::ObISQLConnection *base_connection = nullptr;
+        ObIInnerSQLConnection *connection = nullptr;
+        sqlclient::ObISQLConnectionGuard connection_guard;
+        common::sqlclient::ObMySQLResult *rows = nullptr;
+        ObSQLSessionInfo::StmtSavedValue saved_session;
+        ObIInnerSQLConnection::SavedValue saved_connection;
+        bool nested_session_started = false;
+        if (OB_FAIL(query::ObInnerSQLConnectionAccess::
+                        create_spi_connection_with_external_session(
+                            session_info_, connection_guard))) {
+          LOG_WARN("failed to open current-session connection for AI strict read", K(ret));
+        } else if (OB_ISNULL(base_connection = connection_guard.get_ptr())
+                   || OB_ISNULL(connection = as_inner_sql_connection(base_connection))) {
+          ret = OB_ERR_UNEXPECTED;
+        } else if (OB_FAIL(connection->begin_nested_session(
+                               saved_session, saved_connection,
+                               false /* skip_current_statement_tables */))) {
+          LOG_WARN("failed to begin nested session for AI strict read", K(ret));
+        } else if (OB_FALSE_IT(nested_session_started = true)) {
+        } else if (OB_FAIL(connection->execute_read(
+                               sql.string(), result,
+                               false /* is_user_sql: hidden state column is internal */))) {
           LOG_WARN("failed to inspect AI column readiness", K(ret), K(sql));
         } else if (OB_ISNULL(rows = result.get_result())) {
           ret = OB_ERR_UNEXPECTED;
@@ -2314,6 +2343,13 @@ int ObDMLResolver::check_ai_column_strict_read(const ObRawExpr &expr)
                          table_schema->get_table_id(), column_schema->get_column_id());
         } else if (ret == OB_ITER_END) {
           ret = OB_SUCCESS;
+        }
+        if (nested_session_started) {
+          const int end_ret = connection->end_nested_session(saved_session, saved_connection);
+          if (OB_SUCCESS != end_ret) {
+            LOG_WARN("failed to end nested session for AI strict read", K(end_ret));
+            ret = COVER_SUCC(end_ret);
+          }
         }
       }
     }
@@ -3114,7 +3150,11 @@ int ObDMLResolver::resolve_table_column_expr(const ObQualifiedName &q_name, ObRa
       }
     } else {
       ColumnItem *col_item = NULL;
-      if (OB_FAIL(resolve_single_table_column_item(*table_item, q_name.col_name_, false, col_item))) {
+      const bool internal_ai_update = current_scope_ == T_UPDATE_SCOPE && table_item->is_basic_table() &&
+          ((session_info_->is_inner() && !session_info_->is_user_session() &&
+            AIColumnPublishGuard::permits(table_item->ref_id_)) ||
+           AIColumnRetryGuard::active_for(table_item->ref_id_));
+      if (OB_FAIL(resolve_single_table_column_item(*table_item, q_name.col_name_, internal_ai_update, col_item))) {
       } else if (OB_ISNULL(col_item)) {
         ret = OB_ERR_UNEXPECTED;
       } else {
