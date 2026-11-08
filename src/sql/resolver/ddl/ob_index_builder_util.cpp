@@ -93,6 +93,12 @@ int ObIndexBuilderUtil::add_column(
     ObColumnSchemaV2 column;
     if (OB_FAIL(column.assign(*data_column))) {
     } else {
+      // An index-table column is a physical copy of the source value, not a
+      // second AI result column.  Keeping the AI definition here leaves its
+      // hidden state/request/spec column ids pointing at the data table and
+      // makes vector-index auxiliary schemas invalid.  The owning definition
+      // remains exclusively on the data-table column.
+      column.clear_ai_column_definition();
       column.set_table_id(OB_INVALID_ID);
       column.set_autoincrement(false);
       column.set_tbl_part_key_pos(0);

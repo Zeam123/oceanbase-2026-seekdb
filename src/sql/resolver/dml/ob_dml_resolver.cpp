@@ -45,8 +45,6 @@
 #include "sql/resolver/ddl/ob_ddl_resolver.h"
 #include "sql/hybrid_search/ob_hybrid_search_executor.h"
 #include "common/mysqlclient/ob_mysql_proxy.h"
-#include "query/api/query/session/ob_inner_sql_connection_access.h"
-#include "sql/session/ob_inner_sql_connection.h"
 
 namespace oceanbase
 {
@@ -2312,28 +2310,16 @@ int ObDMLResolver::check_ai_column_strict_read(const ObRawExpr &expr)
     OZ (sql.append(" <> 1 LIMIT 1"));
     if (OB_SUCC(ret)) {
       SMART_VAR(ObMySQLProxy::MySQLResult, result) {
-        sqlclient::ObISQLConnection *base_connection = nullptr;
-        ObIInnerSQLConnection *connection = nullptr;
-        sqlclient::ObISQLConnectionGuard connection_guard;
         common::sqlclient::ObMySQLResult *rows = nullptr;
-        ObSQLSessionInfo::StmtSavedValue saved_session;
-        ObIInnerSQLConnection::SavedValue saved_connection;
-        bool nested_session_started = false;
-        if (OB_FAIL(query::ObInnerSQLConnectionAccess::
-                        create_spi_connection_with_external_session(
-                            session_info_, connection_guard))) {
-          LOG_WARN("failed to open current-session connection for AI strict read", K(ret));
-        } else if (OB_ISNULL(base_connection = connection_guard.get_ptr())
-                   || OB_ISNULL(connection = as_inner_sql_connection(base_connection))) {
+        // Do not resolve this probe through the user's session.  Doing so
+        // recursively enters the SELECT resolver while it is still resolving
+        // the outer AI-column reference and can corrupt the namespace state
+        // (the outer column then appears as "unknown").  The tenant SQL proxy
+        // uses an internal session where strict-read is OFF and therefore
+        // performs a non-recursive committed-state probe.
+        if (OB_ISNULL(GCTX.sql_proxy_)) {
           ret = OB_ERR_UNEXPECTED;
-        } else if (OB_FAIL(connection->begin_nested_session(
-                               saved_session, saved_connection,
-                               false /* skip_current_statement_tables */))) {
-          LOG_WARN("failed to begin nested session for AI strict read", K(ret));
-        } else if (OB_FALSE_IT(nested_session_started = true)) {
-        } else if (OB_FAIL(connection->execute_read(
-                               sql.string(), result,
-                               false /* is_user_sql: hidden state column is internal */))) {
+        } else if (OB_FAIL(GCTX.sql_proxy_->read(result, sql.ptr()))) {
           LOG_WARN("failed to inspect AI column readiness", K(ret), K(sql));
         } else if (OB_ISNULL(rows = result.get_result())) {
           ret = OB_ERR_UNEXPECTED;
@@ -2343,13 +2329,6 @@ int ObDMLResolver::check_ai_column_strict_read(const ObRawExpr &expr)
                          table_schema->get_table_id(), column_schema->get_column_id());
         } else if (ret == OB_ITER_END) {
           ret = OB_SUCCESS;
-        }
-        if (nested_session_started) {
-          const int end_ret = connection->end_nested_session(saved_session, saved_connection);
-          if (OB_SUCCESS != end_ret) {
-            LOG_WARN("failed to end nested session for AI strict read", K(end_ret));
-            ret = COVER_SUCC(end_ret);
-          }
         }
       }
     }

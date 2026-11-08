@@ -103,6 +103,11 @@ bool operator!=(const ObColumnSchemaV2 &r) const;
 
 int assign(const ObColumnSchemaV2 &src_schema);
 int set_ai_column_definition(const ObAIColumnDefinition &definition);
+void clear_ai_column_definition()
+{
+  ai_column_ = ObAIColumnDefinition();
+  del_column_flag(AI_RESULT_COLUMN_FLAG);
+}
 const ObAIColumnDefinition &get_ai_column_definition() const { return ai_column_; }
 bool is_ai_column() const { return !ai_column_.expression_.empty(); }
 bool has_ai_column_definition_flag() const { return (column_flags_ & AI_RESULT_COLUMN_FLAG) != 0; }
