@@ -2271,7 +2271,6 @@ int ObDDLResolver::prepare_ai_column_definition(
           if (is_ai_dependency || dependency->is_ai_column() || dependency->is_hidden() ||
               dependency->is_generated_column()) {
             ret = OB_NOT_SUPPORTED;
-            LOG_USER_ERROR(OB_NOT_SUPPORTED, "AI COLUMN dependency on AI or hidden columns");
           } else {
             bool seen = false;
             for (int64_t j = 0; !seen && j < dependencies.count(); ++j) {

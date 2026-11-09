@@ -773,7 +773,7 @@ int ObAlterTableResolver::resolve_ai_column_retry(const ParseNode &node, const b
       || node.children_[0] == nullptr
       || node.str_value_ == nullptr || node.str_len_ <= 0) {
     ret = OB_NOT_SUPPORTED;
-    LOG_USER_ERROR(OB_NOT_SUPPORTED, "RETRY AI COLUMN must be the only ALTER TABLE action");
+    LOG_USER_ERROR(OB_NOT_SUPPORTED, "combining AI COLUMN RETRY with another ALTER action");
   } else {
     const ObString column_name(node.children_[0]->str_len_, node.children_[0]->str_value_);
     if (OB_ISNULL(stmt) || OB_ISNULL(table_schema_)) {
@@ -781,7 +781,7 @@ int ObAlterTableResolver::resolve_ai_column_retry(const ParseNode &node, const b
     } else if (OB_ISNULL(column = table_schema_->get_column_schema(column_name))
                || !column->is_ai_column()) {
       ret = OB_NOT_SUPPORTED;
-      LOG_USER_ERROR(OB_NOT_SUPPORTED, "RETRY target must be an AI COLUMN");
+      LOG_USER_ERROR(OB_NOT_SUPPORTED, "retrying a column that is not an AI column");
     } else if (OB_ISNULL(state_column = table_schema_->get_column_schema(
                              column->get_ai_column_definition().state_column_id_))
                || OB_ISNULL(request_column = table_schema_->get_column_schema(

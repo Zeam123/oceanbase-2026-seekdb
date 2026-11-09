@@ -13910,8 +13910,8 @@ static const _error _error_OB_AI_COLUMN_NOT_READY = {
       .error_solution        = "Wait for generation to finish or retry failed rows",
       .mysql_errno           = -1,
       .sqlstate              = "HY000",
-      .str_error             = "AI column is not ready",
-      .str_user_error        = "AI column is not ready: table_id=%lu, column_id=%lu"
+      .str_error             = "AI column has unfinished tasks",
+      .str_user_error        = "AI column has unfinished tasks for table_id=%lu, column_id=%lu"
 };
 static const _error _error_OB_CLOB_ONLY_SUPPORT_WITH_MULTIBYTE_FUN = {
       .error_name            = "OB_CLOB_ONLY_SUPPORT_WITH_MULTIBYTE_FUN",
