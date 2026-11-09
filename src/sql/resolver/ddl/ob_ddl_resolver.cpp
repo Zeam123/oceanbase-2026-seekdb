@@ -4857,7 +4857,7 @@ int ObDDLResolver::resolve_vec_index_constraint(
     // do nothing
   } else if (!column_schema.is_valid()) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (column_schema.is_generated_column()) {
+  } else if (column_schema.is_generated_column() && !column_schema.is_ai_column()) {
     ret = OB_NOT_SUPPORTED;
     LOG_USER_ERROR(OB_NOT_SUPPORTED, "Using generate column as vector index column is");
   } else {
