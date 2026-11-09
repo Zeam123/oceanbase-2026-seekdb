@@ -73,11 +73,18 @@ int insert_ai_column_definition(ObISQLClient &sql_client,
 int insert_ai_column_definitions(ObISQLClient &sql_client, const ObTableSchema &table)
 {
   int ret = OB_SUCCESS;
-  for (auto iter = table.column_begin(); OB_SUCC(ret) && iter != table.column_end(); ++iter) {
-    if (*iter == nullptr) {
-      ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(insert_ai_column_definition(
-                       sql_client, table.get_table_id(), table.get_schema_version(), **iter))) {
+  // AI COLUMN ownership belongs to the business table only.  Vector indexes
+  // create several auxiliary index tables whose columns are copied from the
+  // data table.  Persisting copied definitions for those physical columns
+  // leaves metadata pointing at companion column ids from another table and
+  // can make vector-index DDL and cleanup fail.
+  if (table.is_user_table()) {
+    for (auto iter = table.column_begin(); OB_SUCC(ret) && iter != table.column_end(); ++iter) {
+      if (*iter == nullptr) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (OB_FAIL(insert_ai_column_definition(
+                         sql_client, table.get_table_id(), table.get_schema_version(), **iter))) {
+      }
     }
   }
   return ret;
