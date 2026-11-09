@@ -16,6 +16,8 @@
 
 #define USING_LOG_PREFIX SQL_RESV
 #include "sql/resolver/ob_resolver.h"
+#include "common/mysqlclient/ob_mysql_proxy.h"
+#include "share/ob_server_struct.h"
 #include "lib/utility/ob_smart_call.h"
 #include "lib/stat/ob_diagnostic_info_guard.h"
 #include "sql/resolver/cmd/ob_alter_system_resolver.h"
@@ -101,6 +103,131 @@ using namespace common;
 using namespace share;
 namespace sql
 {
+
+namespace
+{
+
+struct AIColumnStrictTarget
+{
+  const ObTableSchema *table_;
+  const ObColumnSchemaV2 *column_;
+  const ObColumnSchemaV2 *state_;
+  const ObDatabaseSchema *database_;
+};
+
+int check_ai_column_strict_read(ObResolverParams &params, ObDMLStmt &stmt)
+{
+  int ret = OB_SUCCESS;
+  int64_t strict_read = 0;
+  ObSEArray<AIColumnStrictTarget, 4> targets;
+  if (OB_ISNULL(params.session_info_) || OB_ISNULL(params.schema_checker_) ||
+      OB_ISNULL(params.query_ctx_)) {
+    ret = OB_ERR_UNEXPECTED;
+  } else if (params.session_info_->is_inner()) {
+    // The readiness probes below are inner SQL and must not recursively check themselves.
+  } else if (OB_FAIL(params.session_info_->get_sys_variable(
+                         SYS_VAR_AI_COLUMN_STRICT_READ, strict_read))) {
+    LOG_WARN("failed to read AI column strict-read setting", K(ret));
+  } else if (strict_read == 0) {
+  } else {
+    params.query_ctx_->disable_plan_cache_ = true;
+    ObSEArray<ObDMLStmt *, 8> pending;
+    OZ (pending.push_back(&stmt));
+    while (OB_SUCC(ret) && !pending.empty()) {
+      ObDMLStmt *current = pending.at(pending.count() - 1);
+      pending.pop_back();
+      ObSEArray<ObSelectStmt *, 4> children;
+      ObSEArray<ObColumnRefRawExpr *, 16> referenced_columns;
+      if (OB_ISNULL(current)) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (OB_FAIL(current->get_subquery_stmts(children))) {
+        LOG_WARN("failed to collect subqueries for AI strict read", K(ret));
+      } else {
+        for (int64_t i = 0; OB_SUCC(ret) && i < children.count(); ++i) {
+          OZ (pending.push_back(children.at(i)));
+        }
+      }
+      if (OB_SUCC(ret) && OB_FAIL(current->get_column_exprs(referenced_columns))) {
+        LOG_WARN("failed to collect referenced columns for AI strict read", K(ret));
+      }
+      for (int64_t i = 0; OB_SUCC(ret) && i < referenced_columns.count(); ++i) {
+        const ObColumnRefRawExpr *ref = referenced_columns.at(i);
+        const TableItem *item = nullptr;
+        const ObTableSchema *table = nullptr;
+        const ObColumnSchemaV2 *column = nullptr;
+        const ObColumnSchemaV2 *state = nullptr;
+        const ObDatabaseSchema *database = nullptr;
+        if (OB_ISNULL(ref)) {
+          ret = OB_ERR_UNEXPECTED;
+        } else if (OB_ISNULL(item = current->get_table_item_by_id(ref->get_table_id())) ||
+                   !item->is_basic_table()) {
+        } else if (OB_FAIL(params.schema_checker_->get_table_schema(item->ref_id_, table))) {
+          LOG_WARN("failed to get table schema for AI strict read", K(ret), K(item->ref_id_));
+        } else if (OB_ISNULL(table) ||
+                   OB_ISNULL(column = table->get_column_schema(ref->get_column_id())) ||
+                   !column->is_ai_column()) {
+        } else if (OB_ISNULL(state = table->get_column_schema(
+                                 column->get_ai_column_definition().state_column_id_))) {
+          ret = OB_SCHEMA_EAGAIN;
+        } else if (OB_FAIL(params.schema_checker_->get_database_schema(
+                               table->get_database_id(), database))) {
+          LOG_WARN("failed to get database schema for AI strict read", K(ret));
+        } else if (OB_ISNULL(database)) {
+          ret = OB_ERR_UNEXPECTED;
+        } else {
+          bool duplicate = false;
+          for (int64_t j = 0; !duplicate && j < targets.count(); ++j) {
+            duplicate = targets.at(j).table_->get_table_id() == table->get_table_id() &&
+                        targets.at(j).column_->get_column_id() == column->get_column_id();
+          }
+          if (!duplicate) {
+            AIColumnStrictTarget target = {table, column, state, database};
+            OZ (targets.push_back(target));
+          }
+        }
+      }
+    }
+  }
+
+  for (int64_t i = 0; OB_SUCC(ret) && i < targets.count(); ++i) {
+    const AIColumnStrictTarget &target = targets.at(i);
+    ObSqlString sql;
+    OZ (sql.append("SELECT 1 FROM "));
+    OZ (ObResolverUtils::append_qualified_identifier(
+          sql, target.database_->get_database_name_str(),
+          target.table_->get_table_name_str()));
+    OZ (sql.append(" WHERE "));
+    OZ (ObResolverUtils::append_escaped_identifier(
+          sql, target.state_->get_column_name_str()));
+    OZ (sql.append(" IS NULL OR "));
+    OZ (ObResolverUtils::append_escaped_identifier(
+          sql, target.state_->get_column_name_str()));
+    OZ (sql.append(" <> 1 LIMIT 1"));
+    if (OB_SUCC(ret)) {
+      SMART_VAR(ObMySQLProxy::MySQLResult, result) {
+        common::sqlclient::ObMySQLResult *rows = nullptr;
+        int next_ret = OB_SUCCESS;
+        if (OB_ISNULL(GCTX.sql_proxy_)) {
+          ret = OB_ERR_UNEXPECTED;
+        } else if (OB_FAIL(GCTX.sql_proxy_->read(result, sql.ptr()))) {
+          LOG_WARN("failed to inspect AI column readiness", K(ret), K(sql));
+        } else if (OB_ISNULL(rows = result.get_result())) {
+          ret = OB_ERR_UNEXPECTED;
+        } else if (OB_SUCCESS == (next_ret = rows->next())) {
+          ret = OB_AI_COLUMN_NOT_READY;
+          LOG_USER_ERROR(OB_AI_COLUMN_NOT_READY,
+                         target.table_->get_table_id(), target.column_->get_column_id());
+        } else if (next_ret != OB_ITER_END) {
+          ret = next_ret;
+        }
+      }
+    }
+  }
+  return ret;
+}
+
+} // namespace
+
 ObResolver::ObResolver(ObResolverParams &params)
     : params_(params)
 {
@@ -633,6 +760,11 @@ int ObResolver::resolve(IsPrepared if_prepared, const ParseNode &parse_tree, ObS
         break;
       }
     }  // end switch
+    if (OB_SUCC(ret) && !stmt->is_explain_stmt() && stmt->is_dml_stmt() &&
+        OB_FAIL(check_ai_column_strict_read(
+            params_, *static_cast<ObDMLStmt *>(stmt)))) {
+      LOG_WARN("AI column strict-read check failed", K(ret));
+    }
     if (OB_SUCC(ret) && stmt->is_dml_write_stmt()) {
       // todo yanli:check leader-follower database
     }

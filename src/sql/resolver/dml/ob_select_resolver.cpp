@@ -3321,9 +3321,6 @@ int ObSelectResolver::resolve_column_ref_expr(
   }
   if (OB_SUCC(ret) && OB_FAIL(resolve_column_ref_in_all_namespace(q_name, real_ref_expr))) {
     LOG_WARN_IGNORE_COL_NOTFOUND(ret, "resolve column ref in all namespace failed", K(ret));
-  } else if (OB_SUCC(ret) && OB_NOT_NULL(real_ref_expr) &&
-             OB_FAIL(check_ai_column_strict_read(*real_ref_expr))) {
-    LOG_WARN("AI column strict-read check failed", K(ret), K(q_name));
   }
   return ret;
 }
