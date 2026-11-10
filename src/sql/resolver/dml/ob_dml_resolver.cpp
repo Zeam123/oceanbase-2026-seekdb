@@ -2430,7 +2430,8 @@ int ObDMLResolver::resolve_basic_table_without_cte(const ParseNode &parse_tree, 
                  OB_FAIL(resolve_index_hint(*table_item, *index_hint_node))) {
       }
 
-      if (OB_SUCC(ret) && !stmt->is_select_stmt() && table_schema->has_ai_columns()) {
+      if (OB_SUCC(ret) && !stmt->is_select_stmt() &&
+          !session_info_->get_ddl_info().is_ddl() && table_schema->has_ai_columns()) {
         ObDelUpdStmt *write_stmt = dynamic_cast<ObDelUpdStmt *>(stmt);
         if (OB_ISNULL(write_stmt)) {
           ret = OB_ERR_UNEXPECTED;

@@ -794,11 +794,21 @@ int ObAlterTableResolver::resolve_ai_column_retry(const ParseNode &node, const b
     } else {
       ObString raw(node.str_len_, node.str_value_);
       int64_t where_pos = -1;
-      for (int64_t i = 0; where_pos < 0 && i + 7 <= raw.length(); ++i) {
-        if (raw.ptr()[i] == ' '
-            && ObString(5, raw.ptr() + i + 1).case_compare("where") == 0
-            && i + 6 < raw.length() && raw.ptr()[i + 6] == ' ') {
-          where_pos = i + 7;
+      for (int64_t i = 0; where_pos < 0 && i + 5 <= raw.length(); ++i) {
+        const bool left_boundary = i == 0
+            || raw.ptr()[i - 1] == ' ' || raw.ptr()[i - 1] == '\t'
+            || raw.ptr()[i - 1] == '\r' || raw.ptr()[i - 1] == '\n';
+        const bool right_boundary = i + 5 < raw.length()
+            && (raw.ptr()[i + 5] == ' ' || raw.ptr()[i + 5] == '\t'
+                || raw.ptr()[i + 5] == '\r' || raw.ptr()[i + 5] == '\n');
+        if (left_boundary && right_boundary
+            && ObString(5, raw.ptr() + i).case_compare("where") == 0) {
+          where_pos = i + 5;
+          while (where_pos < raw.length()
+                 && (raw.ptr()[where_pos] == ' ' || raw.ptr()[where_pos] == '\t'
+                     || raw.ptr()[where_pos] == '\r' || raw.ptr()[where_pos] == '\n')) {
+            ++where_pos;
+          }
         }
       }
       ObSqlString predicate;

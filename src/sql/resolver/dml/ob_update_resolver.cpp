@@ -135,6 +135,26 @@ int ObUpdateResolver::resolve(const ParseNode &parse_tree)
   }
 
   if (OB_SUCC(ret)) {
+    // AI result invalidation is an implicit assignment to the result/state/request
+    // columns.  Add it before expanding generated-column assignments so vector
+    // index helper columns that depend on an AI result are included in the same
+    // update and their related index ctdefs are generated.
+    for (int64_t i = 0; OB_SUCC(ret) && i < tables_assign.count(); ++i) {
+      const TableItem *table_item = update_stmt->get_table_item_by_id(tables_assign.at(i).table_id_);
+      const ObTableSchema *table_schema = nullptr;
+      if (OB_ISNULL(table_item)) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (OB_FAIL(schema_checker_->get_table_schema(
+                     table_item->get_base_table_item().ref_id_, table_schema))) {
+      } else if (OB_ISNULL(table_schema)) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (OB_FAIL(add_ai_column_invalidation(*table_schema, *table_item,
+                                                    tables_assign.at(i)))) {
+      }
+    }
+  }
+
+  if (OB_SUCC(ret)) {
     // Parse cascading update columns
     if (OB_FAIL(resolve_additional_assignments(tables_assign,
                                                T_UPDATE_SCOPE))) {
@@ -488,7 +508,6 @@ int ObUpdateResolver::generate_update_table_info(ObTableAssignment &table_assign
                                                        table_schema))) {
   } else if (OB_ISNULL(table_schema)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_FAIL(add_ai_column_invalidation(*table_schema, *table_item, table_assign))) {
   } else if (OB_FAIL(schema_checker_->get_can_write_index_array(table_item->get_base_table_item().ref_id_,
                                                                 index_tid, gindex_cnt, true))) {
   } else if (OB_FAIL(params_.session_info_->get_binlog_row_image(binlog_row_image))) {

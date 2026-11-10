@@ -93,6 +93,7 @@ int ObIndexBuilderUtil::add_column(
     ObColumnSchemaV2 column;
     if (OB_FAIL(column.assign(*data_column))) {
     } else {
+      const bool is_ai_result_column = column.is_ai_column();
       // An index-table column is a physical copy of the source value, not a
       // second AI result column.  Keeping the AI definition here leaves its
       // hidden state/request/spec column ids pointing at the data table and
@@ -114,7 +115,21 @@ int ObIndexBuilderUtil::add_column(
       // Fulltext column's default value is needed, because we need to set GENERATED_CTXCAT_CASCADE_FLAG
       // spatial column's default value is needed, because we need to set SPATIAL_INDEX_GENERATED_COLUMN_FLAG
       // flag by parsing the default value.
-      del_column_flags_and_default_value(column);
+      if (is_ai_result_column) {
+        // AI result columns use the generated-column machinery only to carry
+        // their definition on the data table.  Index tables receive stored
+        // result values, so retaining either the generated flag or expression
+        // makes online index build resolve AI_EMBED/AI_COMPLETE as nested SQL
+        // and incorrectly disables PDML.
+        column.del_column_flag(VIRTUAL_GENERATED_COLUMN_FLAG);
+        column.del_column_flag(STORED_GENERATED_COLUMN_FLAG);
+        ObObj null_default;
+        null_default.set_null();
+        column.set_cur_default_value(null_default, column.is_default_expr_v2_column());
+        column.set_orig_default_value(null_default);
+      } else {
+        del_column_flags_and_default_value(column);
+      }
       if (is_rowkey) {
         column.set_rowkey_position(row_desc.get_column_num());
         column.set_order_in_rowkey(order_type);

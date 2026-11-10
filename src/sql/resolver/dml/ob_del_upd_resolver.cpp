@@ -2162,7 +2162,8 @@ int ObDelUpdResolver::resolve_insert_columns(const ParseNode *node,
         ret = OB_ERR_UNEXPECTED;
       } else if (FALSE_IT(column_expr = static_cast<ObColumnRefRawExpr*>(ref_expr))) {
         //do nothing
-      } else if (insert_schema != nullptr && insert_schema->has_ai_columns() &&
+      } else if (!session_info_->get_ddl_info().is_ddl() &&
+                 insert_schema != nullptr && insert_schema->has_ai_columns() &&
                  (target_column = insert_schema->get_column_schema(column_expr->get_column_id())) != nullptr &&
                  (target_column->is_ai_column() || target_column->is_hidden())) {
         ret = OB_NOT_SUPPORTED;

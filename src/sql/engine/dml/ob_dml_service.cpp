@@ -2185,6 +2185,17 @@ int ai_update_value_changed(ObEvalCtx &eval_ctx, const ObDMLBaseCtDef &ctdef,
   return ret;
 }
 
+static bool ai_expr_depends_on(const ObExpr *expr, const ObExpr *target, const int64_t depth = 0)
+{
+  bool depends = expr == target;
+  if (!depends && OB_NOT_NULL(expr) && depth < 64) {
+    for (int64_t i = 0; !depends && i < expr->arg_cnt_; ++i) {
+      depends = ai_expr_depends_on(expr->args_[i], target, depth + 1);
+    }
+  }
+  return depends;
+}
+
 int invalidate_ai_column_results(ObTableModifyOp &op, const ObDMLBaseCtDef &ctdef)
 {
   int ret = OB_SUCCESS;
@@ -2246,6 +2257,16 @@ int invalidate_ai_column_results(ObTableModifyOp &op, const ObDMLBaseCtDef &ctde
                   result_expr->set_evaluated_projected(eval_ctx);
                   state_expr->locate_datum_for_write(eval_ctx).set_int(0);
                   state_expr->set_evaluated_projected(eval_ctx);
+                  // Generated/index helper expressions may have been evaluated while
+                  // checking the update row.  They must be recomputed from the now
+                  // invalidated AI result, otherwise vector index maintenance sees
+                  // the old vector even though the base-table result is NULL.
+                  for (int64_t i = 0; i < ctdef.full_row_.count(); ++i) {
+                    ObExpr *expr = ctdef.full_row_.at(i);
+                    if (expr != result_expr && ai_expr_depends_on(expr, result_expr)) {
+                      expr->clear_evaluated_flag(eval_ctx);
+                    }
+                  }
                 }
               }
             }
