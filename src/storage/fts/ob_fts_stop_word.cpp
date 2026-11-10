@@ -71,26 +71,35 @@ void ObStopWordChecker::destroy()
   }
 }
 
-int ObStopWordChecker::check_stopword(const ObFTWord &word, bool &is_stopword)
+int ObStopWordChecker::check_stopword(
+    const ObFTWord &word,
+    bool &is_stopword,
+    common::ObIAllocator *scratch_alloc)
 {
   int ret = OB_SUCCESS;
-  
-  
-  common::ObArenaAllocator allocator(lib::ObMemAttr("ChkStopWord"));
   if (OB_UNLIKELY(!inited_)) {
     ret = OB_NOT_INIT;
   } else if (OB_UNLIKELY(word.empty())) {
     ret = OB_INVALID_ARGUMENT;
   } else {
     common::ObString cmp_str;
-    // do nothing set out with in if type is the same.
-    if (OB_FAIL(common::ObCharset::charset_convert(
-                                       allocator,
+    if (word.get_collation_type() == stopword_type_.get_collation_type()) {
+      cmp_str = word.get_word().get_string();
+    } else {
+      common::ObArenaAllocator fallback_alloc(lib::ObMemAttr("ChkStopWord"));
+      common::ObIAllocator *allocator = nullptr == scratch_alloc ? &fallback_alloc : scratch_alloc;
+      if (nullptr != scratch_alloc) {
+        scratch_alloc->reuse();
+      }
+      if (OB_FAIL(common::ObCharset::charset_convert(
+                                       *allocator,
                                        word.get_word().get_string(),
                                        word.get_collation_type(),
                                        stopword_type_.get_collation_type(),
                                        cmp_str))) {
-    } else {
+      }
+    }
+    if (OB_SUCC(ret)) {
       ObFTWord converted(cmp_str.length(), cmp_str.ptr(), stopword_type_);
       ret = stopword_set_.exist_refactored(converted);
       if (OB_HASH_NOT_EXIST == ret) {
@@ -124,7 +133,8 @@ ObAddWord::ObAddWord(
     stopword_cnt_(0),
     min_token_size_(property.min_token_size_),
     max_token_size_(property.max_token_size_),
-    flag_(flag)
+    flag_(flag),
+    scratch_alloc_(lib::ObMemAttr("AddWordScratch"))
 {
 }
 
@@ -189,7 +199,7 @@ int ObAddWord::check_stopword(const ObFTWord &ft_word, bool &is_stopword)
     ObStopWordChecker *stop_word_checker = ObFTParseData::instance().stop_word_checker();
     if (OB_ISNULL(stop_word_checker)) {
       ret = OB_ERR_UNEXPECTED;
-    } else if (OB_FAIL(stop_word_checker->check_stopword(ft_word, is_stopword))) {
+    } else if (OB_FAIL(stop_word_checker->check_stopword(ft_word, is_stopword, &scratch_alloc_))) {
     }
   }
   return ret;

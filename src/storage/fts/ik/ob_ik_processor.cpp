@@ -39,8 +39,7 @@ int ObIIKProcessor::process(TokenizeContext &ctx)
   const char *ch = nullptr;
   uint8_t char_len = 0;
 
-  if (OB_FAIL(ctx.current_char_type(type))) {
-  } else if (OB_FAIL(ctx.current_char(ch, char_len))) {
+  if (OB_FAIL(ctx.current_char_and_type(ch, char_len, type))) {
   } else if (OB_FAIL(do_process(ctx, ch, char_len, type))) {
   }
   return ret;
@@ -94,6 +93,22 @@ int TokenizeContext::current_char_type(ObFTCharUtil::CharType &type)
   if (cursor_ >= fulltext_len_) {
     ret = OB_ITER_END;
   } else {
+    type = next_char_type_;
+  }
+  return ret;
+}
+
+int TokenizeContext::current_char_and_type(
+    const char *&ch,
+    uint8_t &char_len,
+    ObFTCharUtil::CharType &type)
+{
+  int ret = OB_SUCCESS;
+  if (cursor_ >= fulltext_len_) {
+    ret = OB_ITER_END;
+  } else {
+    ch = fulltext_ + cursor_;
+    char_len = next_char_len_;
     type = next_char_type_;
   }
   return ret;
