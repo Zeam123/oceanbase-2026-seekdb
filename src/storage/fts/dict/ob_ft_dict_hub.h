@@ -17,8 +17,10 @@
 #ifndef _OCEANBASE_STORAGE_FTS_DICT_OB_FT_DICT_HUB_H_
 #define _OCEANBASE_STORAGE_FTS_DICT_OB_FT_DICT_HUB_H_
 
+#include "lib/allocator/page_arena.h"
 #include "lib/charset/ob_charset.h"
 #include "lib/lock/ob_bucket_lock.h"
+#include "lib/lock/ob_mutex.h"
 #include "storage/fts/dict/ob_ft_dict_def.h"
 
 namespace oceanbase
@@ -93,10 +95,28 @@ private:
 };
 
 class ObFTCacheRangeContainer;
+class ObFTRangeDict;
+class ObIFTDict;
 class ObFTDictHub
 {
 public:
-  ObFTDictHub() : is_inited_(false), dict_map_(), rw_dict_lock_() {}
+  static constexpr int64_t MAX_SHARED_DICT_CNT = 4;
+  struct ObFTSharedDict
+  {
+    ObFTSharedDict() : container_(nullptr), dict_(nullptr) {}
+    ObFTCacheRangeContainer *container_;
+    ObFTRangeDict *dict_;
+  };
+
+  ObFTDictHub()
+      : is_inited_(false),
+        dict_map_(),
+        rw_dict_lock_(),
+        shared_dict_lock_(),
+        shared_dict_alloc_()
+  {
+    shared_dict_alloc_.set_label("FTSharedDict");
+  }
   ~ObFTDictHub() {}
 
   int init();
@@ -107,17 +127,23 @@ public:
 
   int load_cache(const ObFTDictDesc &desc, ObFTCacheRangeContainer &container);
 
+  int get_shared_dict(const ObFTDictDesc &desc, ObIFTDict *&dict);
+
 private:
   int get_dict_info(const ObFTDictInfoKey &key, ObFTDictInfo &info);
 
   int put_dict_info(const ObFTDictInfoKey &key, const ObFTDictInfo &info);
 
+  int build_shared_dict(const ObFTDictDesc &desc, ObFTSharedDict &shared_dict);
 
 private:
   bool is_inited_;
   // holds info of dict
   hash::ObHashMap<ObFTDictInfoKey, ObFTDictInfo> dict_map_;
   ObBucketLock rw_dict_lock_;
+  lib::ObMutex shared_dict_lock_;
+  ObArenaAllocator shared_dict_alloc_;
+  ObFTSharedDict shared_dicts_[MAX_SHARED_DICT_CNT];
 };
 
 } //  namespace storage

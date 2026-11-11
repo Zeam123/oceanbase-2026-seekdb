@@ -44,8 +44,76 @@ int ObFTDictHub::destroy()
 {
   int ret = OB_SUCCESS;
   is_inited_ = false;
+  for (int64_t i = 0; i < MAX_SHARED_DICT_CNT; ++i) {
+    if (nullptr != shared_dicts_[i].dict_) {
+      shared_dicts_[i].dict_->~ObFTRangeDict();
+      shared_dicts_[i].dict_ = nullptr;
+    }
+    if (nullptr != shared_dicts_[i].container_) {
+      shared_dicts_[i].container_->~ObFTCacheRangeContainer();
+      shared_dicts_[i].container_ = nullptr;
+    }
+  }
+  shared_dict_alloc_.reset();
   return ret;
 }
+
+int ObFTDictHub::get_shared_dict(const ObFTDictDesc &desc, ObIFTDict *&dict)
+{
+  int ret = OB_SUCCESS;
+  dict = nullptr;
+  const int64_t idx = static_cast<int64_t>(desc.type_)
+      - static_cast<int64_t>(ObFTDictType::DICT_IK_MAIN);
+  if (!is_inited_) {
+    ret = OB_NOT_INIT;
+  } else if (idx < 0 || idx >= MAX_SHARED_DICT_CNT) {
+    ret = OB_INVALID_ARGUMENT;
+  } else {
+    lib::ObMutexGuard guard(shared_dict_lock_);
+    ObFTSharedDict &shared_dict = shared_dicts_[idx];
+    if (nullptr == shared_dict.dict_
+        && OB_FAIL(build_shared_dict(desc, shared_dict))) {
+    } else {
+      dict = shared_dict.dict_;
+    }
+  }
+  return ret;
+}
+
+int ObFTDictHub::build_shared_dict(const ObFTDictDesc &desc,
+                                   ObFTSharedDict &shared_dict)
+{
+  int ret = OB_SUCCESS;
+  void *buf = nullptr;
+  ObFTCacheRangeContainer *container = nullptr;
+  ObFTRangeDict *range_dict = nullptr;
+  if (OB_UNLIKELY(nullptr != shared_dict.dict_)) {
+  } else if (OB_ISNULL(buf = shared_dict_alloc_.alloc(sizeof(ObFTCacheRangeContainer)))) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else if (OB_ISNULL(container = new (buf) ObFTCacheRangeContainer(shared_dict_alloc_))) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else if (OB_FAIL(load_cache(desc, *container))) {
+    if (OB_ENTRY_NOT_EXIST == ret) {
+      ret = OB_SUCCESS;
+      if (OB_FAIL(build_cache(desc, *container))) {
+      }
+    }
+  }
+  if (OB_FAIL(ret)) {
+  } else if (OB_ISNULL(range_dict = OB_NEWx(ObFTRangeDict,
+                                             &shared_dict_alloc_,
+                                             shared_dict_alloc_,
+                                             container,
+                                             desc))) {
+    ret = OB_ALLOCATE_MEMORY_FAILED;
+  } else if (OB_FAIL(range_dict->init())) {
+  } else {
+    shared_dict.container_ = container;
+    shared_dict.dict_ = range_dict;
+  }
+  return ret;
+}
+
 int ObFTDictHub::build_cache(const ObFTDictDesc &desc, ObFTCacheRangeContainer &container)
 {
   int ret = OB_SUCCESS;

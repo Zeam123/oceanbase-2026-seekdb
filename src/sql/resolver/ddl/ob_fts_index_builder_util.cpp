@@ -1045,9 +1045,14 @@ int ObFtsIndexBuilderUtil::decide_parallelism(
         decided_parallelism = MAX(original_parallelism, 1L);
         break;
       case share::schema::ObIndexType::INDEX_TYPE_DOC_ID_ROWKEY_LOCAL:
+        decided_parallelism = MAX(original_parallelism / 3, 1L);
+        break;
       case share::schema::ObIndexType::INDEX_TYPE_FTS_INDEX_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL:
-        decided_parallelism = MAX(original_parallelism / 3, 1L);
+        // Tokenization of disjoint macro blocks has no ordering dependency.
+        // Preserve an explicitly selected parallelism and give default FTS DDL
+        // a small floor instead of dividing the CPU-heavy legs by three.
+        decided_parallelism = MAX(original_parallelism, 4L);
         break;
       case share::schema::ObIndexType::INDEX_TYPE_NORMAL_MULTIVALUE_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_UNIQUE_MULTIVALUE_LOCAL:
