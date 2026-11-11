@@ -1049,10 +1049,9 @@ int ObFtsIndexBuilderUtil::decide_parallelism(
         break;
       case share::schema::ObIndexType::INDEX_TYPE_FTS_INDEX_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL:
-        // Tokenization of disjoint macro blocks has no ordering dependency.
-        // Keep enough workers for BENG while bounding merge and write
-        // contention observed for IK content indexes at high parallelism.
-        decided_parallelism = MAX(MIN(original_parallelism, 8L), 4L);
+        // Two build workers retain parallel tokenization while limiting the
+        // number of inverted-index fragments visited by MATCH queries.
+        decided_parallelism = 2L;
         break;
       case share::schema::ObIndexType::INDEX_TYPE_NORMAL_MULTIVALUE_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_UNIQUE_MULTIVALUE_LOCAL:
