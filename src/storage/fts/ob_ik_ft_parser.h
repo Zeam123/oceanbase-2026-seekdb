@@ -39,9 +39,11 @@ public:
       : allocator_(allocator),
         is_inited_(false),
         coll_type_(ObCollationType::CS_TYPE_INVALID),
+        ik_smart_(true),
         ctx_(nullptr),
         hub_(hub),
-        segmenters_(allocator_),
+        work_alloc_(ObMemAttr("IKParserWork")),
+        segmenters_(work_alloc_),
         is_shared_dict_(false),
         dict_main_(nullptr),
         dict_quan_(nullptr),
@@ -52,6 +54,8 @@ public:
   virtual ~ObIKFTParser() { reset(); }
 
   int init(const ObFTParserParam &param);
+  int reuse_init(const ObFTParserParam &param);
+  bool can_reuse(const ObFTParserParam &param) const;
 
   int get_next_token(const char *&word,
                      int64_t &word_len,
@@ -77,6 +81,7 @@ private:
 
   int init_ctx(const ObFTParserParam &param);
 
+  void destroy_work();
   void reset();
 
   bool should_read_newest_table() const;
@@ -87,9 +92,11 @@ private:
   bool is_inited_;
 
   ObCollationType coll_type_;
+  bool ik_smart_;
   TokenizeContext *ctx_;
   ObFTDictHub *hub_;
   ObIKArbitrator arb_;
+  ObArenaAllocator work_alloc_;
   ObList<ObIIKProcessor *, ObIAllocator> segmenters_;
 
   // Built-in dictionaries are immutable and owned by ObFTDictHub.

@@ -1049,9 +1049,9 @@ int ObFtsIndexBuilderUtil::decide_parallelism(
         break;
       case share::schema::ObIndexType::INDEX_TYPE_FTS_INDEX_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL:
-        // Two build workers retain parallel tokenization while limiting the
-        // number of inverted-index fragments visited by MATCH queries.
-        decided_parallelism = 2L;
+        // Bound parallel tokenization to avoid both serial DDL and excessive
+        // merge/write contention on large-core hosts.
+        decided_parallelism = MAX(MIN(original_parallelism, 8L), 4L);
         break;
       case share::schema::ObIndexType::INDEX_TYPE_NORMAL_MULTIVALUE_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_UNIQUE_MULTIVALUE_LOCAL:
