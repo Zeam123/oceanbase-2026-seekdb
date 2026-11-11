@@ -1050,9 +1050,9 @@ int ObFtsIndexBuilderUtil::decide_parallelism(
       case share::schema::ObIndexType::INDEX_TYPE_FTS_INDEX_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_FTS_DOC_WORD_LOCAL:
         // Tokenization of disjoint macro blocks has no ordering dependency.
-        // Preserve an explicitly selected parallelism and give default FTS DDL
-        // a small floor instead of dividing the CPU-heavy legs by three.
-        decided_parallelism = MAX(original_parallelism, 4L);
+        // Keep enough workers for BENG while bounding merge and write
+        // contention observed for IK content indexes at high parallelism.
+        decided_parallelism = MAX(MIN(original_parallelism, 8L), 4L);
         break;
       case share::schema::ObIndexType::INDEX_TYPE_NORMAL_MULTIVALUE_LOCAL:
       case share::schema::ObIndexType::INDEX_TYPE_UNIQUE_MULTIVALUE_LOCAL:
